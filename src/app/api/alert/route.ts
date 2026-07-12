@@ -15,7 +15,7 @@ export async function POST() {
   await sendAlert({
     severity: 'info',
     title: 'Test alert',
-    lines: ['If you can read this, espressoduty can reach this channel.'],
+    lines: ['espressoduty can reach this channel'],
   });
   return NextResponse.json({ ok: true, channels });
 }
