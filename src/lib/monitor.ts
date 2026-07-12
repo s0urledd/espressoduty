@@ -1,10 +1,11 @@
 // The polling engine. Started once from instrumentation.ts.
 //
 // Espresso exposes participation as a per-epoch *rate* (0.0-1.0), not a
-// per-block signed/missed stream, so the vote state machine works on
-// sampled rates against absolute thresholds. When LOCAL_NODE_URL is set,
-// the operator's own node is the primary read source (no public rate
-// limits, fastest data); the public query nodes remain as fallback.
+// per-block signed/missed stream, and each node reports its own subjective
+// view of it. Participation is therefore read from the PUBLIC query nodes
+// (closest to what delegators see); the local node, when configured, is
+// used for status and liveness, and only as a last-resort fallback for
+// participation.
 //
 // Ground rules, same as monadoring: never alert on the first observation
 // of anything; every bad alert has a matching recovery that only fires if
@@ -50,7 +51,19 @@ interface ValidatorMachine {
 }
 
 interface NetworkMachine {
-  client: EspressoClient;
+  /**
+   * Participation and identity reads. Public query nodes FIRST: the
+   * participation maps are subjective to the serving node, and an
+   * operator's own node (especially after a restart) reports a view of
+   * itself that can diverge wildly from what delegators see. The local
+   * node is only the last-resort fallback here.
+   */
+  partClient: EspressoClient;
+  /**
+   * Status reads (height, time-since-last-decide). Local node first when
+   * configured: for liveness, your own node's view is the one you want.
+   */
+  statusClient: EspressoClient;
   view: NetworkView;
   validators: Map<string, ValidatorMachine>;
   epoch: number | null;
@@ -122,9 +135,11 @@ function explorerLink(net: NetworkConfig): AlertEvent['link'] {
 // ---------------------------------------------------------------------------
 
 function initNetwork(net: NetworkConfig): NetworkMachine {
-  // Local node first when configured (mainnet only), public nodes as fallback.
   const useLocal = net.name === 'mainnet' && cfg.localNodeUrl !== null;
-  const endpoints = useLocal ? [cfg.localNodeUrl!, ...net.queryNodes] : net.queryNodes;
+  // Participation: public first, local as last resort (see NetworkMachine).
+  const partEndpoints = useLocal ? [...net.queryNodes, cfg.localNodeUrl!] : net.queryNodes;
+  // Status: local first, it is your node's liveness that matters.
+  const statusEndpoints = useLocal ? [cfg.localNodeUrl!, ...net.queryNodes] : net.queryNodes;
 
   const view: NetworkView = {
     name: net.name,
@@ -132,8 +147,9 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
     height: null,
     timeSinceLastDecide: null,
     lastPollAt: null,
-    endpoints: endpoints.map(
-      (url, i): EndpointView => ({ url, isActive: i === 0, isLocal: useLocal && i === 0 }),
+    // The dashboard's "src" shows where the participation metrics come from.
+    endpoints: partEndpoints.map(
+      (url, i): EndpointView => ({ url, isActive: i === 0, isLocal: url === cfg.localNodeUrl }),
     ),
     validators: net.validators.map(
       (v): ValidatorView => ({
@@ -153,7 +169,8 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
     ),
   };
   const m: NetworkMachine = {
-    client: new EspressoClient(endpoints),
+    partClient: new EspressoClient(partEndpoints),
+    statusClient: new EspressoClient(statusEndpoints),
     view,
     validators: new Map(
       net.validators.map((v) => [
@@ -197,9 +214,9 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
   const m = machines.get(net.name)!;
   let stakeTable, voteMap: ParticipationMap, proposalMap: ParticipationMap;
   try {
-    stakeTable = await m.client.currentStakeTable();
-    voteMap = await m.client.voteParticipation('current');
-    proposalMap = await m.client.proposalParticipation('current');
+    stakeTable = await m.partClient.currentStakeTable();
+    voteMap = await m.partClient.voteParticipation('current');
+    proposalMap = await m.partClient.proposalParticipation('current');
   } catch (err) {
     console.error(`[monitor] ${net.name} participation poll failed: ${err instanceof Error ? err.message : err}`);
     // Record the gap so the dashboard grid shows an honest empty cell.
@@ -469,7 +486,7 @@ async function onValidatorMissing(
 
   let classification = 'not in the validator registry, check the configured key';
   try {
-    const info = await m.client.findInAllValidators(epoch, vv.key);
+    const info = await m.partClient.findInAllValidators(epoch, vv.key);
     if (info) {
       classification = `registered but inactive (account ${info.account})`;
       vv.account = info.account;
@@ -507,7 +524,7 @@ async function onValidatorMissing(
 async function refreshIdentity(net: NetworkConfig, m: NetworkMachine, epoch: number): Promise<void> {
   let byAccount: Record<string, ValidatorInfo>;
   try {
-    byAccount = await m.client.validators(epoch);
+    byAccount = await m.partClient.validators(epoch);
   } catch (err) {
     console.error(`[monitor] ${net.name} validators(${epoch}) failed: ${err instanceof Error ? err.message : err}`);
     return;
@@ -530,7 +547,7 @@ async function refreshIdentity(net: NetworkConfig, m: NetworkMachine, epoch: num
 async function pollStatus(net: NetworkConfig): Promise<void> {
   const m = machines.get(net.name)!;
   try {
-    const [height, tsld] = await Promise.all([m.client.blockHeight(), m.client.timeSinceLastDecide()]);
+    const [height, tsld] = await Promise.all([m.statusClient.blockHeight(), m.statusClient.timeSinceLastDecide()]);
     m.view.height = height;
     m.view.timeSinceLastDecide = tsld;
 
@@ -538,7 +555,7 @@ async function pollStatus(net: NetworkConfig): Promise<void> {
   } catch (err) {
     console.error(`[monitor] ${net.name} status poll failed: ${err instanceof Error ? err.message : err}`);
   }
-  for (const [i, ev] of m.view.endpoints.entries()) ev.isActive = i === m.client.activeIndex;
+  for (const [i, ev] of m.view.endpoints.entries()) ev.isActive = i === m.partClient.activeIndex;
   publish();
 }
 
@@ -550,13 +567,13 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
     // if any other endpoint sees recent decides, the problem is this
     // endpoint (or our config/rate limit), not consensus.
     let secondarySeesProgress = false;
-    for (let i = 0; i < m.client.endpoints.length; i++) {
-      if (i === m.client.activeIndex) continue;
+    for (let i = 0; i < m.statusClient.endpoints.length; i++) {
+      if (i === m.statusClient.activeIndex) continue;
       try {
-        const other = await EspressoClient.getFrom<number>(m.client.endpoints[i], 'status/time-since-last-decide', 6000);
+        const other = await EspressoClient.getFrom<number>(m.statusClient.endpoints[i], 'status/time-since-last-decide', 6000);
         if (other <= cfg.decideStallSec) {
           secondarySeesProgress = true;
-          m.client.activeIndex = i; // read from the endpoint that is seeing progress
+          m.statusClient.activeIndex = i; // read from the endpoint that is seeing progress
           break;
         }
       } catch {
@@ -744,7 +761,9 @@ export function startMonitoring(): void {
       watched ? `Watching: ${watched}` : 'No validators configured yet',
       `Poll: ${cfg.pollIntervalSec}s, status: ${cfg.statusPollIntervalSec}s`,
       `Channels: ${store.channels.join(', ') || 'none'}`,
-      cfg.localNodeUrl ? 'Source: local node, public fallback' : 'Source: public query service',
+      cfg.localNodeUrl
+        ? 'Participation: public query service. Status and health checks: local node'
+        : 'Source: public query service',
     ],
   });
 }

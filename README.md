@@ -11,8 +11,11 @@ Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
 events.
 
 Works with no node at all against the public query service. Point
-`LOCAL_NODE_URL` at your own node and it reads from there first, with the
-public endpoints as fallback.
+`LOCAL_NODE_URL` at your own node to add reachability and sync-lag checks;
+status reads then come from your node first. Participation metrics always
+come from the public query service: each node reports its own subjective
+view of participation, and the public view is the one closest to what
+delegators see.
 
 ![dashboard, light theme](docs/dashboard-light.png)
 
@@ -96,8 +99,8 @@ All settings live in `.env`, fully commented in
 
 ## Data sources
 
-Everything comes from the Espresso query service (`/v1`), local node first
-when configured. Semantics verified against the node's own API reference:
+Everything comes from the Espresso query service (`/v1`). Semantics verified
+against the node's own API reference:
 
 - `node/participation/proposal/current`: fraction of views where the key
   proposed properly as leader. Missed slots = 1 - value.
@@ -107,6 +110,12 @@ when configured. Semantics verified against the node's own API reference:
   (basis points), delegators. Used to tell "dropped from the set" from
   "wrong key".
 - `status/block-height`, `status/time-since-last-decide`: liveness.
+
+Participation numbers are subjective per serving node, which is why they are
+read from the public endpoints rather than your own node. They can still
+differ from stake.espresso.network, whose missed-slots column comes from a
+separate streaming aggregator with its own observation window; the
+definition is the same, the window is not.
 
 State lives in memory: a restart starts clean, which is also why the first
 poll never alerts.
