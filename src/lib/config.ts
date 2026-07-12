@@ -35,6 +35,12 @@ export interface Config {
   voteCritical: number;
   decideStallSec: number;
   heightLagBlocks: number;
+  /** Suppress absolute-rate alerts for this many minutes after an epoch rollover. */
+  epochMinSampleMin: number;
+  /** Consecutive failed checks before the local node counts as down. */
+  localDownFails: number;
+  /** Timeout for status/health probes; a busy node can be slow without being down. */
+  statusPollTimeoutSec: number;
   alertCooldownMin: number;
   /** Participation / stake-table poll interval. */
   pollIntervalSec: number;
@@ -118,6 +124,9 @@ export function loadConfig(): Config {
     voteCritical: num('VOTE_CRITICAL', 0.5),
     decideStallSec: num('DECIDE_STALL_SEC', 60),
     heightLagBlocks: num('HEIGHT_LAG_BLOCKS', 20),
+    epochMinSampleMin: num('EPOCH_MIN_SAMPLE_MIN', 10),
+    localDownFails: Math.max(2, num('LOCAL_DOWN_FAILS', 3)),
+    statusPollTimeoutSec: Math.max(3, num('STATUS_POLL_TIMEOUT_SEC', 10)),
     alertCooldownMin: num('ALERT_COOLDOWN_MIN', 30),
     pollIntervalSec: Math.max(15, num('POLL_INTERVAL_SEC', 60)),
     statusPollIntervalSec: Math.max(5, num('STATUS_POLL_INTERVAL_SEC', 10)),

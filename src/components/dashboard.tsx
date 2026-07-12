@@ -379,9 +379,12 @@ function Metric({
 
 /**
  * tenderduty-style grid, kept honest: one cell is ONE POLL, not a block.
- * Espresso has no per-block signed/missed stream. Cell color follows the
- * vote-participation band; an empty bordered cell means that poll returned
- * no data. Thin vertical lines mark epoch boundaries.
+ * Espresso only exposes the cumulative epoch average, so a cell is colored
+ * by what happened DURING that poll window: the average climbing between
+ * two polls means the node was voting right then (green), falling or flat
+ * on a low average means it was missing views (band color). A cell with a
+ * healthy average is green regardless. Empty bordered cell = no data;
+ * thin vertical lines mark epoch boundaries.
  */
 function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
   const recent = samples.slice(-90);
@@ -401,20 +404,29 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
           const prev = recent[i - 1];
           const boundary = prev !== undefined && prev.epoch !== null && s.epoch !== null && prev.epoch !== s.epoch;
           const time = new Date(s.t).toLocaleTimeString('en-US', { hour12: false });
+          const sameEpochPrev =
+            prev !== undefined && prev.vote !== null && prev.epoch === s.epoch ? prev.vote : null;
+          const rising = s.vote !== null && sameEpochPrev !== null && s.vote > sameEpochPrev + 0.0001;
+          const falling = s.vote !== null && sameEpochPrev !== null && s.vote < sameEpochPrev - 0.0001;
+          const color =
+            s.vote === null
+              ? null
+              : s.vote >= VOTE_WARN || rising
+                ? 'var(--ok)'
+                : s.vote >= VOTE_CRIT && !falling
+                  ? 'var(--warn)'
+                  : 'var(--crit)';
+          const trend = rising ? ' ↑ voting' : falling ? ' ↓ missing views' : '';
           const tip =
             s.vote === null
               ? `${time} · no data`
-              : `${time} · epoch ${s.epoch} · vote ${fmtPct(s.vote)}`;
+              : `${time} · epoch ${s.epoch} · vote ${fmtPct(s.vote)}${trend}`;
           return (
             <div key={s.t} className="flex h-4 items-stretch" title={tip}>
               {boundary && <span className="mr-px w-px shrink-0" style={{ background: 'var(--border-strong)' }} />}
               <span
                 className="w-1.5 rounded-[2px]"
-                style={
-                  s.vote === null
-                    ? { border: '1px solid var(--border)', background: 'transparent' }
-                    : { background: rateColor(s.vote) }
-                }
+                style={color === null ? { border: '1px solid var(--border)', background: 'transparent' } : { background: color }}
               />
             </div>
           );

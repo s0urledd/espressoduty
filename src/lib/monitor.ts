@@ -18,11 +18,6 @@ import { getStore, publish, pushSample, type NetworkView, type ValidatorView, ty
 
 const cfg = loadConfig();
 
-// A fresh epoch's rate is computed over a handful of views: one missed
-// view can read as a catastrophic 0.0. Skip absolute-threshold alerts for
-// the first few samples after a rollover (recoveries still fire).
-const EPOCH_GRACE_SAMPLES = 3;
-
 // ---------------------------------------------------------------------------
 // Internal (non-view) state
 // ---------------------------------------------------------------------------
@@ -48,6 +43,12 @@ interface ValidatorMachine {
   missingAlerted: boolean;
   missingSince: number | null;
   missingPdTriggered: boolean;
+  /**
+   * Last proposal rate observed in the current epoch. Once a real value has
+   * been seen, a single poll whose map momentarily lacks the key must not
+   * flip the card back to a dash. Reset at epoch rollover.
+   */
+  heldProposal: number | null;
 }
 
 interface NetworkMachine {
@@ -67,8 +68,17 @@ interface NetworkMachine {
   view: NetworkView;
   validators: Map<string, ValidatorMachine>;
   epoch: number | null;
-  /** Samples left to skip for absolute-threshold alerts after a rollover. */
-  epochGraceLeft: number;
+  /** Absolute-rate alerts are suppressed until this time after a rollover. */
+  suppressUntil: number;
+  /**
+   * True once the local node was seen down or lagging during the current
+   * epoch. Missed-slots alerts stay suppressed for the rest of that epoch:
+   * the cumulative average keeps reporting slots lost during the outage,
+   * which the root-cause alert already covered and nobody can act on.
+   */
+  epochHadNodeIssue: boolean;
+  /** Base URL that served the last successful participation poll. */
+  lastPartSource: string | null;
   stallAlerted: boolean;
   stallSince: number | null;
   stallPdTriggered: boolean;
@@ -136,10 +146,13 @@ function explorerLink(net: NetworkConfig): AlertEvent['link'] {
 
 function initNetwork(net: NetworkConfig): NetworkMachine {
   const useLocal = net.name === 'mainnet' && cfg.localNodeUrl !== null;
-  // Participation: public first, local as last resort (see NetworkMachine).
+  // Identity reads (validators, all-validators): public first, local last resort.
   const partEndpoints = useLocal ? [...net.queryNodes, cfg.localNodeUrl!] : net.queryNodes;
   // Status: local first, it is your node's liveness that matters.
   const statusEndpoints = useLocal ? [cfg.localNodeUrl!, ...net.queryNodes] : net.queryNodes;
+  // Participation itself is fetched per poll from ONE source picked by
+  // participationSources(); the dashboard's "src" tracks that choice.
+  const displayEndpoints = useLocal ? [cfg.localNodeUrl!, ...net.queryNodes] : net.queryNodes;
 
   const view: NetworkView = {
     name: net.name,
@@ -147,9 +160,8 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
     height: null,
     timeSinceLastDecide: null,
     lastPollAt: null,
-    // The dashboard's "src" shows where the participation metrics come from.
-    endpoints: partEndpoints.map(
-      (url, i): EndpointView => ({ url, isActive: i === 0, isLocal: url === cfg.localNodeUrl }),
+    endpoints: displayEndpoints.map(
+      (url): EndpointView => ({ url, isActive: false, isLocal: url === cfg.localNodeUrl }),
     ),
     validators: net.validators.map(
       (v): ValidatorView => ({
@@ -191,11 +203,14 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
           missingAlerted: false,
           missingSince: null,
           missingPdTriggered: false,
+          heldProposal: null,
         } satisfies ValidatorMachine,
       ]),
     ),
     epoch: null,
-    epochGraceLeft: 0,
+    suppressUntil: 0,
+    epochHadNodeIssue: false,
+    lastPartSource: null,
     stallAlerted: false,
     stallSince: null,
     stallPdTriggered: false,
@@ -210,13 +225,53 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
 // Participation poll (the main signal)
 // ---------------------------------------------------------------------------
 
+/**
+ * Source order for one participation poll. The whole poll is served by a
+ * single base URL so vote and proposal can never come from two different
+ * nodes' subjective maps (that mismatch is what made proposal values flick
+ * between a dash and a number). Prefer the local node when it is confirmed
+ * reachable and in sync; otherwise the public query nodes, in order. An
+ * out-of-sync local node is excluded entirely: its maps are stale.
+ */
+function participationSources(net: NetworkConfig): string[] {
+  if (net.name === 'mainnet' && cfg.localNodeUrl) {
+    const ln = getStore().localNode;
+    const localInSync =
+      ln?.reachable === true && ln.lagBlocks !== null && ln.lagBlocks <= cfg.heightLagBlocks;
+    if (localInSync) return [cfg.localNodeUrl, ...net.queryNodes];
+  }
+  return [...net.queryNodes];
+}
+
+interface ParticipationBatch {
+  stakeTable: Awaited<ReturnType<EspressoClient['currentStakeTable']>>;
+  voteMap: ParticipationMap;
+  proposalMap: ParticipationMap;
+  source: string;
+}
+
+async function fetchParticipation(net: NetworkConfig): Promise<ParticipationBatch> {
+  let lastErr: unknown;
+  for (const base of participationSources(net)) {
+    try {
+      const [stakeTable, voteMap, proposalMap] = await Promise.all([
+        EspressoClient.getFrom<ParticipationBatch['stakeTable']>(base, 'node/stake-table/current'),
+        EspressoClient.getFrom<ParticipationMap>(base, 'node/participation/vote/current'),
+        EspressoClient.getFrom<ParticipationMap>(base, 'node/participation/proposal/current'),
+      ]);
+      return { stakeTable, voteMap, proposalMap, source: base };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 async function pollParticipation(net: NetworkConfig): Promise<void> {
   const m = machines.get(net.name)!;
-  let stakeTable, voteMap: ParticipationMap, proposalMap: ParticipationMap;
+  let batch: ParticipationBatch;
   try {
-    stakeTable = await m.partClient.currentStakeTable();
-    voteMap = await m.partClient.voteParticipation('current');
-    proposalMap = await m.partClient.proposalParticipation('current');
+    batch = await fetchParticipation(net);
   } catch (err) {
     console.error(`[monitor] ${net.name} participation poll failed: ${err instanceof Error ? err.message : err}`);
     // Record the gap so the dashboard grid shows an honest empty cell.
@@ -225,13 +280,26 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     publish();
     return;
   }
+  const { stakeTable, voteMap, proposalMap, source } = batch;
+  m.lastPartSource = source;
+  for (const ev of m.view.endpoints) ev.isActive = ev.url === source;
 
   const epoch = stakeTable.epoch;
   const stakeByKey = new Map(
     stakeTable.stake_table.map((e) => [e.stake_table_entry.stake_key, e.stake_table_entry.stake_amount]),
   );
 
-  if (m.epoch !== null && epoch > m.epoch) m.epochGraceLeft = EPOCH_GRACE_SAMPLES;
+  if (m.epoch !== null && epoch > m.epoch) {
+    // Rollover: rates reset. Suppress absolute alerts while the young epoch
+    // has too few samples, and drop all per-epoch state so the previous
+    // epoch's numbers cannot bleed into this one.
+    m.suppressUntil = Date.now() + cfg.epochMinSampleMin * 60_000;
+    m.epochHadNodeIssue = false;
+    for (const vm of m.validators.values()) {
+      vm.heldProposal = null;
+      vm.pdConsecutiveCrit = 0;
+    }
+  }
   if (m.epoch !== epoch) {
     m.epoch = epoch;
     await refreshIdentity(net, m, epoch);
@@ -240,13 +308,22 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
   m.view.epoch = epoch;
   m.view.lastPollAt = Date.now();
 
-  const suppressed = m.epochGraceLeft > 0 || localNodeUnhealthy();
-  if (m.epochGraceLeft > 0) m.epochGraceLeft -= 1;
+  if (localNodeUnhealthy()) m.epochHadNodeIssue = true;
+  const suppressed = Date.now() < m.suppressUntil || localNodeUnhealthy();
+  // Missed slots is a cumulative epoch average: after an outage it keeps
+  // reporting slots lost during it, which is not actionable. Stay quiet
+  // about it for the rest of that epoch.
+  const missedSuppressed = suppressed || m.epochHadNodeIssue;
 
   for (const vv of m.view.validators) {
     const vm = m.validators.get(vv.key)!;
     const vote = Object.prototype.hasOwnProperty.call(voteMap, vv.key) ? voteMap[vv.key] : null;
-    const proposal = Object.prototype.hasOwnProperty.call(proposalMap, vv.key) ? proposalMap[vv.key] : null;
+    const inProposalMap = Object.prototype.hasOwnProperty.call(proposalMap, vv.key);
+    // Key-in-map presence is the source of truth for dash vs number, but a
+    // value seen earlier this epoch is held so one poll without the key
+    // cannot flip the card back to a dash.
+    if (inProposalMap) vm.heldProposal = proposalMap[vv.key];
+    const proposal = inProposalMap ? proposalMap[vv.key] : vm.heldProposal;
 
     vv.inActiveSet = stakeByKey.has(vv.key);
     const stakeHex = stakeByKey.get(vv.key);
@@ -261,7 +338,7 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     if (vote === null) {
       await onValidatorMissing(net, m, vv, vm, epoch, suppressed);
     } else {
-      await onValidatorPresent(net, vv, vm, vote, epoch, suppressed);
+      await onValidatorPresent(net, vv, vm, vote, epoch, suppressed, missedSuppressed);
     }
     vv.health = healthOf(vv, vm);
     vm.initialized = true;
@@ -299,6 +376,7 @@ async function onValidatorPresent(
   vote: number,
   epoch: number,
   suppressed: boolean,
+  missedSuppressed: boolean,
 ): Promise<void> {
   // Return from "missing from the participation map".
   if (vm.missingAlerted) {
@@ -344,10 +422,14 @@ async function onValidatorPresent(
   }
 
   // --- Missed slots: the delegator-facing metric, and the one that pages.
-  // Only evaluated when the key appears in the proposal map: no leader
-  // slots this epoch is not a failure and never alerts.
-  if (missedStatus === null) {
+  // Only evaluated when proposal data exists for this epoch (no leader
+  // slots is not a failure) and only for a healthy, in-sync node: an
+  // outage earlier in the epoch keeps the cumulative average high, and
+  // slots already lost are not actionable (missedSuppressed).
+  if (missedStatus === null || missedSuppressed) {
     vm.pdConsecutiveCrit = 0;
+    if (missedStatus === 'ok' && missed !== null) await maybeMissedRecovery(net, vv, vm, missed, epoch);
+    if (missedStatus !== null) vm.missedStatus = missedStatus;
   } else {
     if (missedStatus === 'crit') {
       vm.pdConsecutiveCrit += 1;
@@ -555,7 +637,6 @@ async function pollStatus(net: NetworkConfig): Promise<void> {
   } catch (err) {
     console.error(`[monitor] ${net.name} status poll failed: ${err instanceof Error ? err.message : err}`);
   }
-  for (const [i, ev] of m.view.endpoints.entries()) ev.isActive = i === m.partClient.activeIndex;
   publish();
 }
 
@@ -645,7 +726,13 @@ async function pollLocalNode(): Promise<void> {
   const view = store.localNode!;
 
   try {
-    const height = await EspressoClient.getFrom<number>(cfg.localNodeUrl, 'status/block-height', 8000);
+    // Generous timeout: a node busy with consensus or an epoch rollover can
+    // answer slowly without being down.
+    const height = await EspressoClient.getFrom<number>(
+      cfg.localNodeUrl,
+      'status/block-height',
+      cfg.statusPollTimeoutSec * 1000,
+    );
     view.reachable = true;
     view.height = height;
     lm.failCount = 0;
@@ -665,7 +752,11 @@ async function pollLocalNode(): Promise<void> {
     if (lm.remoteBase) {
       let remoteHeight: number | null = null;
       try {
-        remoteHeight = await EspressoClient.getFrom<number>(lm.remoteBase, 'status/block-height', 8000);
+        remoteHeight = await EspressoClient.getFrom<number>(
+          lm.remoteBase,
+          'status/block-height',
+          cfg.statusPollTimeoutSec * 1000,
+        );
       } catch {
         /* public node unreachable; skip the lag check this round */
       }
@@ -673,6 +764,9 @@ async function pollLocalNode(): Promise<void> {
         const lag = remoteHeight - height;
         view.lagBlocks = lag;
         if (lag > cfg.heightLagBlocks) {
+          // Participation dips during the lag are a symptom of this.
+          const mainnet = machines.get('mainnet');
+          if (mainnet) mainnet.epochHadNodeIssue = true;
           if (lm.initialized && !lm.lagAlerted && cooldownOk('local:lag')) {
             lm.lagAlerted = true;
             await sendAlert({
@@ -694,16 +788,20 @@ async function pollLocalNode(): Promise<void> {
     lm.initialized = true;
   } catch {
     lm.failCount += 1;
-    if (lm.failCount >= 2) {
+    // One slow or dropped response never counts as down: a busy node can
+    // miss a probe. Declare down only after N consecutive failures.
+    if (lm.failCount >= cfg.localDownFails) {
       view.reachable = false;
       view.lagBlocks = null;
+      const mainnet = machines.get('mainnet');
+      if (mainnet) mainnet.epochHadNodeIssue = true;
       if (lm.initialized && !lm.downAlerted && cooldownOk('local:down')) {
         lm.downAlerted = true;
         lm.downSince = Date.now();
         await sendAlert({
           severity: 'critical',
           title: 'Local node unreachable',
-          lines: [`${cfg.localNodeUrl} is not responding`],
+          lines: [`${cfg.localNodeUrl} failed ${lm.failCount} consecutive checks`],
         });
       }
     }
