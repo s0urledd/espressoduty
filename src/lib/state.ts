@@ -7,15 +7,6 @@
 
 import type { NetworkName } from './config';
 
-export interface ParticipationSample {
-  /** Unix ms of the poll. */
-  t: number;
-  epoch: number;
-  vote: number | null;
-  /** null = not in the proposal map yet (no leader slots this epoch). */
-  proposal: number | null;
-}
-
 export type ValidatorHealth = 'ok' | 'warn' | 'crit' | 'missing' | 'unknown';
 
 export interface ValidatorView {
@@ -29,23 +20,15 @@ export interface ValidatorView {
   delegatorCount: number | null;
   inActiveSet: boolean | null;
   vote: number | null;
+  /** Shown on the dashboard only; proposal misses never page. */
   proposal: number | null;
   health: ValidatorHealth;
-  samples: ParticipationSample[];
 }
 
 export interface EndpointView {
   url: string;
-  healthy: boolean | null;
-  lastHeight: number | null;
-  isPrimary: boolean;
   isActive: boolean;
-}
-
-export interface EpochSummary {
-  epoch: number;
-  /** Per watched validator: final rates at rollover. */
-  finals: { key: string; label: string; vote: number | null; proposal: number | null; stakeEsp: number | null }[];
+  isLocal: boolean;
 }
 
 export interface NetworkView {
@@ -54,10 +37,8 @@ export interface NetworkView {
   height: number | null;
   timeSinceLastDecide: number | null;
   successRate: number | null;
-  suppressedUntil: number | null;
   validators: ValidatorView[];
   endpoints: EndpointView[];
-  epochHistory: EpochSummary[];
   lastPollAt: number | null;
 }
 
@@ -84,7 +65,6 @@ export interface Store {
   networks: Map<NetworkName, NetworkView>;
   localNode: LocalNodeView | null;
   listeners: Set<Listener>;
-  maxSamples: number;
 }
 
 declare global {
@@ -100,7 +80,6 @@ export function getStore(): Store {
       networks: new Map(),
       localNode: null,
       listeners: new Set(),
-      maxSamples: 1440,
     };
   }
   return globalThis.__espressoduty;
@@ -135,9 +114,4 @@ export function subscribe(fn: Listener): () => void {
   const s = getStore();
   s.listeners.add(fn);
   return () => s.listeners.delete(fn);
-}
-
-export function pushSample(view: ValidatorView, sample: ParticipationSample, max: number): void {
-  view.samples.push(sample);
-  if (view.samples.length > max) view.samples.splice(0, view.samples.length - max);
 }

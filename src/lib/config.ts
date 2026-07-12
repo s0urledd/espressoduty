@@ -17,24 +17,21 @@ export interface NetworkConfig {
 
 export interface Config {
   networks: NetworkConfig[];
-  /** Operator's own node, enables local-down and sync-lag checks. */
+  /**
+   * Operator's own node. When set it becomes the primary read source for
+   * participation and status (the public query nodes stay as fallback),
+   * and enables local-down and sync-lag checks.
+   */
   localNodeUrl: string | null;
   voteWarn: number;
   voteCritical: number;
-  proposalWarn: number;
-  /** Consecutive-poll participation drop that fires the early trend alert. */
-  trendDropThreshold: number;
   decideStallSec: number;
   heightLagBlocks: number;
-  /** Suppress absolute-rate alerts for this many minutes after an epoch rollover. */
-  epochMinSampleMin: number;
   alertCooldownMin: number;
   /** Participation / stake-table poll interval. */
   pollIntervalSec: number;
   /** Lightweight status poll (block height, time-since-last-decide) driving the live dashboard. */
   statusPollIntervalSec: number;
-  queryHealthAlerts: boolean;
-  epochHistoryLength: number;
   telegramBotToken: string;
   telegramChatId: string;
   discordWebhookUrl: string;
@@ -109,16 +106,11 @@ export function loadConfig(): Config {
     localNodeUrl: str('LOCAL_NODE_URL') || null,
     voteWarn: num('VOTE_WARN', 0.9),
     voteCritical: num('VOTE_CRITICAL', 0.5),
-    proposalWarn: num('PROPOSAL_WARN', 0.8),
-    trendDropThreshold: num('TREND_DROP', 0.05),
     decideStallSec: num('DECIDE_STALL_SEC', 60),
     heightLagBlocks: num('HEIGHT_LAG_BLOCKS', 20),
-    epochMinSampleMin: num('EPOCH_MIN_SAMPLE_MIN', 10),
     alertCooldownMin: num('ALERT_COOLDOWN_MIN', 30),
     pollIntervalSec: Math.max(15, num('POLL_INTERVAL_SEC', 60)),
     statusPollIntervalSec: Math.max(5, num('STATUS_POLL_INTERVAL_SEC', 10)),
-    queryHealthAlerts: str('QUERY_HEALTH_ALERTS', 'off').toLowerCase() === 'on',
-    epochHistoryLength: num('EPOCH_HISTORY_LENGTH', 28),
     telegramBotToken: str('TELEGRAM_BOT_TOKEN'),
     telegramChatId: str('TELEGRAM_CHAT_ID'),
     discordWebhookUrl: str('DISCORD_WEBHOOK_URL'),
