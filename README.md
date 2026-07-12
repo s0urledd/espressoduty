@@ -4,15 +4,15 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 
-Uptime monitoring and alerting for [Espresso Network](https://espressosys.com/) validators.
-Watches your validators' vote participation, catches chain stalls and
-set drops, keeps an eye on your node, and pages you over Telegram, Discord,
-Slack or PagerDuty. Ships with a live dashboard on port 3030 that updates
-over server-sent events — no refresh interval, no page reloads.
+Uptime monitoring and alerting for [Espresso Network](https://espressosys.com/)
+validators. Watches missed slots and vote participation, catches chain stalls
+and set drops, keeps an eye on your node, and alerts over Telegram, Discord,
+Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
+events.
 
-Point it at your own node and it reads everything from there (fastest data,
-no public rate limits) with the public query service as automatic fallback —
-or run it with no node at all against the public endpoints.
+Works with no node at all against the public query service. Point
+`LOCAL_NODE_URL` at your own node and it reads from there first, with the
+public endpoints as fallback.
 
 ![dashboard, light theme](docs/dashboard-light.png)
 
@@ -23,26 +23,35 @@ or run it with no node at all against the public endpoints.
 
 </details>
 
-## What it watches
+## Alerts
+
+The headline metric is **missed slots**, the number Espresso's own staking
+dashboard leads with: `1 - proposal_participation`, the fraction of leader
+slots where the validator failed to propose.
 
 | Alert | Severity | Recovery |
 |---|---|---|
-| Vote participation below `VOTE_CRITICAL` | critical (pages after `PAGERDUTY_THRESHOLD` consecutive polls) | yes, with incident low + duration |
-| Vote participation below `VOTE_WARN` | warning | yes |
-| Validator missing from the participation map (dropped from the set / deregistered / wrong key) | critical | yes |
-| No decide for `DECIDE_STALL_SEC` — cross-checked against the other endpoints so a stale endpoint doesn't masquerade as a chain halt | critical (warning if only the endpoint is stale) | yes |
-| Local node unreachable / falling behind the network | critical / warning | yes |
-| Monitor start / shutdown | info | — |
+| Missed slots above `MISSED_CRITICAL` / `MISSED_WARN` | critical (pages) / warning | yes |
+| Vote participation below `VOTE_CRITICAL` / `VOTE_WARN` | critical / warning, chat only | yes |
+| Missing from the participation map | critical, pages | yes |
+| No decide for `DECIDE_STALL_SEC` | critical, or warning if only the endpoint is stale | yes |
+| Local node unreachable / lagging | critical / warning | yes |
+| Start / shutdown | info | — |
 
-Every alert has a matching recovery message, repeated alerts respect a
-cooldown, and nothing ever fires on the first poll after a restart.
+Rules that keep it quiet:
 
-A note on the data: Espresso publishes participation as a **per-epoch rate**
-(`0.0–1.0`), not a per-block signed/missed stream. Rates reset at every epoch
-rollover, and a single missed view early in a young epoch reads as a
-catastrophic rate — so threshold alerts skip the first few samples of each
-new epoch. Proposal participation is shown on the dashboard but never pages:
-leader slots are rare and a single flaky proposal shouldn't wake anyone.
+- Nothing fires on the first poll after a restart, repeats respect a cooldown,
+  and every alert has a matching recovery with the worst value and duration.
+- A key absent from the proposal map shows a dash, like stake.espresso.network.
+  Not being leader this epoch is not a failure and never alerts.
+- Participation rates reset at each epoch, so threshold alerts skip the first
+  few samples after a rollover.
+- While the local node is down or lagging, participation alerts stay quiet:
+  the local-node alert is the root cause.
+- A chain-stall alert is cross-checked against the other endpoints first, so a
+  stale endpoint doesn't masquerade as a network halt.
+- PagerDuty pages only on missed slots (after `PAGERDUTY_THRESHOLD`
+  consecutive criticals) and on dropping out of the set.
 
 ## Quick start
 
@@ -54,75 +63,58 @@ npm install
 npm run build
 ```
 
-Run with PM2 (recommended):
+PM2 (recommended):
 
 ```bash
-npm install -g pm2
 pm2 start ecosystem.config.js
-pm2 logs espressoduty
 ```
 
-Or with Docker:
+Docker:
 
 ```bash
 docker compose up -d --build
 ```
 
-The dashboard is at `http://localhost:3030`. Send a test alert with:
-
-```bash
-curl -X POST http://localhost:3030/api/alert
-```
+Dashboard: `http://localhost:3030`. Test alert:
+`curl -X POST http://localhost:3030/api/alert`
 
 ## Configuration
 
-Everything is configured through `.env` (see [.env.example](.env.example) for
-the full commented list).
+All settings live in `.env`, fully commented in
+[.env.example](.env.example). The essentials:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MAINNET_VALIDATORS` | — | Comma-separated BLS keys. `Label=BLS_VER_KEY~...` attaches a display name |
-| `LOCAL_NODE_URL` | — | Your node's query service; becomes the primary read source and enables local-down + sync-lag checks |
-| `MAINNET_QUERY_NODES` | public query node | Fallback read sources, in order |
-| `TESTNET_VALIDATORS` / `TESTNET_QUERY_NODES` | — | Same, for the Decaf testnet |
-| `VOTE_WARN` / `VOTE_CRITICAL` | `0.90` / `0.50` | Vote participation thresholds |
-| `DECIDE_STALL_SEC` | `60` | Seconds without a decide before the chain counts as stalled |
-| `HEIGHT_LAG_BLOCKS` | `20` | Local-node lag tolerance |
-| `ALERT_COOLDOWN_MIN` | `30` | Minimum minutes between repeats of the same alert |
-| `POLL_INTERVAL_SEC` | `60` | Participation poll interval |
-| `STATUS_POLL_INTERVAL_SEC` | `10` | Fast status poll driving the live dashboard and stall detection |
-| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | — | Telegram channel |
-| `DISCORD_WEBHOOK_URL` / `SLACK_WEBHOOK_URL` | — | Webhook channels |
-| `PAGERDUTY_ROUTING_KEY` + `PAGERDUTY_THRESHOLD` | — / `3` | Page after N consecutive critical polls |
-
-## Dashboard
-
-One page, dark and light themes, pushed live over SSE. Each validator is a
-"pull bar": a participation track that fills against tick marks at your own
-warn/critical thresholds, with a health stripe on the card edge readable
-from across the room. A one-line network status shows height, seconds since
-the last decide, current epoch and which source is being read from.
-
-State lives in memory. A restart starts clean, which is also why the first
-poll never alerts.
+| `MAINNET_VALIDATORS` | — | BLS keys, comma separated. `Label=BLS_VER_KEY~...` adds a name |
+| `LOCAL_NODE_URL` | — | Your node's query service: primary read source + local checks |
+| `MISSED_WARN` / `MISSED_CRITICAL` | `0.50` / `0.90` | Missed-slots thresholds |
+| `VOTE_WARN` / `VOTE_CRITICAL` | `0.90` / `0.50` | Vote thresholds, chat only |
+| `POLL_INTERVAL_SEC` | `60` | Participation poll |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | — | Telegram |
+| `DISCORD_WEBHOOK_URL` / `SLACK_WEBHOOK_URL` | — | Webhooks |
+| `PAGERDUTY_ROUTING_KEY` + `PAGERDUTY_THRESHOLD` | — / `3` | Paging |
 
 ## Data sources
 
 Everything comes from the Espresso query service (`/v1`), local node first
-when configured:
+when configured. Semantics verified against the node's own API reference:
 
-- `node/participation/vote/current` — vote participation rates
-- `node/stake-table/current` — current epoch number, set membership, stake
-- `node/validators/:epoch`, `node/all-validators/...` — identity, commission,
-  delegators; used to tell "dropped from the set" from "wrong key"
-- `status/block-height`, `status/time-since-last-decide`,
-  `status/success-rate` — liveness
+- `node/participation/proposal/current`: fraction of views where the key
+  proposed properly as leader. Missed slots = 1 - value.
+- `node/participation/vote/current`: fraction of views properly voted.
+- `node/stake-table/current`: current epoch number, set membership, stake.
+- `node/validators/:epoch`, `node/all-validators/...`: account, commission
+  (basis points), delegators. Used to tell "dropped from the set" from
+  "wrong key".
+- `status/block-height`, `status/time-since-last-decide`: liveness.
+
+State lives in memory: a restart starts clean, which is also why the first
+poll never alerts.
 
 ## Roadmap
 
-Deliberately not in the MVP: per-endpoint health alerting with failover
-notifications, proposal-participation alerts, participation trend detection
-for public-only setups, and an epoch history view. The groundwork (ordered
-endpoint failover, epoch tracking) is already in place.
+Per-endpoint health alerting, participation trend detection for public-only
+setups, epoch history. The groundwork (endpoint failover, epoch tracking) is
+in place.
 
 MIT licensed.
