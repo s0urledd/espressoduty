@@ -64,7 +64,6 @@ export interface NetworkView {
   epoch: number | null;
   height: number | null;
   timeSinceLastDecide: number | null;
-  successRate: number | null;
   validators: ValidatorView[];
   endpoints: EndpointView[];
   lastPollAt: number | null;

@@ -116,10 +116,6 @@ export class EspressoClient {
     return this.failover<number>('status/time-since-last-decide');
   }
 
-  successRate(): Promise<number> {
-    return this.failover<number>('status/success-rate');
-  }
-
   /** Cheapest known source of the current epoch number. */
   currentStakeTable(): Promise<StakeTableResponse> {
     return this.failover<StakeTableResponse>('node/stake-table/current');

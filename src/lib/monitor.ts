@@ -131,7 +131,6 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
     epoch: null,
     height: null,
     timeSinceLastDecide: null,
-    successRate: null,
     lastPollAt: null,
     endpoints: endpoints.map(
       (url, i): EndpointView => ({ url, isActive: i === 0, isLocal: useLocal && i === 0 }),
@@ -534,7 +533,6 @@ async function pollStatus(net: NetworkConfig): Promise<void> {
     const [height, tsld] = await Promise.all([m.client.blockHeight(), m.client.timeSinceLastDecide()]);
     m.view.height = height;
     m.view.timeSinceLastDecide = tsld;
-    m.client.successRate().then((r) => (m.view.successRate = r)).catch(() => {});
 
     await checkStall(net, m, tsld);
   } catch (err) {
