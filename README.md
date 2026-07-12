@@ -25,24 +25,34 @@ or run it with no node at all against the public endpoints.
 
 ## What it watches
 
+The headline metric is **missed slots**, the same number Espresso's own
+staking dashboard leads with: how often the validator fails to propose when
+it is its turn, computed as `1 - proposal_participation` from the query
+service. Vote participation stays as a secondary, technical signal.
+
 | Alert | Severity | Recovery |
 |---|---|---|
-| Vote participation below `VOTE_CRITICAL` | critical (pages after `PAGERDUTY_THRESHOLD` consecutive polls) | yes, with incident low + duration |
-| Vote participation below `VOTE_WARN` | warning | yes |
-| Validator missing from the participation map (dropped from the set / deregistered / wrong key) | critical | yes |
+| Missed slots above `MISSED_CRITICAL` | critical, pages after `PAGERDUTY_THRESHOLD` consecutive polls | yes, with worst value + duration |
+| Missed slots above `MISSED_WARN` | warning | yes |
+| Vote participation below `VOTE_CRITICAL` / `VOTE_WARN` | critical / warning, chat only | yes, with incident low + duration |
+| Validator missing from the participation map (dropped from the set / deregistered / wrong key) | critical, pages | yes |
 | No decide for `DECIDE_STALL_SEC` — cross-checked against the other endpoints so a stale endpoint doesn't masquerade as a chain halt | critical (warning if only the endpoint is stale) | yes |
 | Local node unreachable / falling behind the network | critical / warning | yes |
 | Monitor start / shutdown | info | — |
 
 Every alert has a matching recovery message, repeated alerts respect a
-cooldown, and nothing ever fires on the first poll after a restart.
+cooldown, and nothing ever fires on the first poll after a restart. While
+the local node is down or lagging, participation alerts are suppressed:
+the local-node alert is the root cause and a syncing node's data is stale.
 
-A note on the data: Espresso publishes participation as a **per-epoch rate**
-(`0.0–1.0`), not a per-block signed/missed stream. Rates reset at every epoch
-rollover, and a single missed view early in a young epoch reads as a
-catastrophic rate — so threshold alerts skip the first few samples of each
-new epoch. Proposal participation is shown on the dashboard but never pages:
-leader slots are rare and a single flaky proposal shouldn't wake anyone.
+Two cases that deliberately never alert:
+
+- **No leader slots yet.** When the key is absent from the proposal map,
+  missed slots shows a dash, exactly like stake.espresso.network. Not being
+  leader this epoch is not a failure.
+- **Young epochs.** Participation rates reset at every rollover and a single
+  missed view early in an epoch reads as a catastrophic rate, so threshold
+  alerts skip the first few samples of each new epoch.
 
 ## Quick start
 
@@ -85,7 +95,8 @@ the full commented list).
 | `LOCAL_NODE_URL` | — | Your node's query service; becomes the primary read source and enables local-down + sync-lag checks |
 | `MAINNET_QUERY_NODES` | public query node | Fallback read sources, in order |
 | `TESTNET_VALIDATORS` / `TESTNET_QUERY_NODES` | — | Same, for the Decaf testnet |
-| `VOTE_WARN` / `VOTE_CRITICAL` | `0.90` / `0.50` | Vote participation thresholds |
+| `MISSED_WARN` / `MISSED_CRITICAL` | `0.50` / `0.90` | Missed-slots thresholds (primary, pages) |
+| `VOTE_WARN` / `VOTE_CRITICAL` | `0.90` / `0.50` | Vote participation thresholds (secondary, chat only) |
 | `DECIDE_STALL_SEC` | `60` | Seconds without a decide before the chain counts as stalled |
 | `HEIGHT_LAG_BLOCKS` | `20` | Local-node lag tolerance |
 | `ALERT_COOLDOWN_MIN` | `30` | Minimum minutes between repeats of the same alert |
@@ -97,11 +108,14 @@ the full commented list).
 
 ## Dashboard
 
-One page, dark and light themes, pushed live over SSE. Each validator is a
-"pull bar": a participation track that fills against tick marks at your own
-warn/critical thresholds, with a health stripe on the card edge readable
-from across the room. A one-line network status shows height, seconds since
-the last decide, current epoch and which source is being read from.
+One page, dark and light themes, pushed live over SSE. Each validator card
+shows vote, proposal and missed slots as big numbers with threshold-colored
+status dots, a tenderduty-style poll grid underneath (one cell per poll,
+never per block: Espresso has no per-block miss stream, and an empty cell
+means that poll returned no data), and a health stripe on the card edge
+readable from across the room. A one-line network status shows height,
+seconds since the last decide, current epoch and which source is being
+read from.
 
 State lives in memory. A restart starts clean, which is also why the first
 poll never alerts.
@@ -111,6 +125,8 @@ poll never alerts.
 Everything comes from the Espresso query service (`/v1`), local node first
 when configured:
 
+- `node/participation/proposal/current` — proposal participation; missed
+  slots = 1 - value, matching stake.espresso.network
 - `node/participation/vote/current` — vote participation rates
 - `node/stake-table/current` — current epoch number, set membership, stake
 - `node/validators/:epoch`, `node/all-validators/...` — identity, commission,

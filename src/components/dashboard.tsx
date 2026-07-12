@@ -17,11 +17,25 @@ import type { Snapshot, NetworkView, ValidatorView } from '@/lib/state';
 // Thresholds mirrored for display only; the server enforces the real ones.
 const VOTE_WARN = Number(process.env.NEXT_PUBLIC_VOTE_WARN ?? 0.9);
 const VOTE_CRIT = Number(process.env.NEXT_PUBLIC_VOTE_CRITICAL ?? 0.5);
+const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
+const MISSED_CRIT = Number(process.env.NEXT_PUBLIC_MISSED_CRITICAL ?? 0.9);
+
+// Espresso's own tooltip wording for a dash in the missed-slots column.
+const NO_SLOTS_HINT =
+  'The validator has not yet proposed any blocks, or may not be actively participating in consensus for the current epoch';
 
 function rateColor(rate: number | null): string {
   if (rate === null) return 'var(--idle)';
   if (rate < VOTE_CRIT) return 'var(--crit)';
   if (rate < VOTE_WARN) return 'var(--warn)';
+  return 'var(--ok)';
+}
+
+/** Missed slots: higher is worse. */
+function missedColor(missed: number | null): string {
+  if (missed === null) return 'var(--idle)';
+  if (missed > MISSED_CRIT) return 'var(--crit)';
+  if (missed > MISSED_WARN) return 'var(--warn)';
   return 'var(--ok)';
 }
 
@@ -294,10 +308,15 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
         </button>
       </div>
 
-      <PullBar label="vote" rate={v.vote} />
-      <div className="mt-3">
-        <PullBar label="proposal" rate={v.proposal} thin emptyText="no leader slots yet" />
+      {/* Big number + status dot per metric; missed slots is Espresso's
+          headline (1 - proposal_participation, like stake.espresso.network) */}
+      <div className="mb-4 grid grid-cols-3 gap-4">
+        <Metric label="vote" value={v.vote} dot={rateColor(v.vote)} />
+        <Metric label="proposal" value={v.proposal} dot={rateColor(v.proposal)} emptyHint={NO_SLOTS_HINT} />
+        <Metric label="missed slots" value={v.missedSlots} dot={missedColor(v.missedSlots)} emptyHint={NO_SLOTS_HINT} />
       </div>
+
+      <PollGrid samples={v.samples} />
 
       <p className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs" style={{ color: 'var(--muted)' }}>
         <span>{v.stakeEsp === null ? '— ESP' : `${fmtInt(Math.round(v.stakeEsp))} ESP`}</span>
@@ -313,62 +332,84 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
   );
 }
 
-/**
- * The signature element: a participation track that fills like an espresso
- * pull. Threshold ticks mark where warn and critical start, so the bar reads
- * against the operator's own thresholds at a glance.
- */
-function PullBar({
+/** Colored status dot, small label, big number. Dash when there is no data. */
+function Metric({
   label,
-  rate,
-  thin,
-  emptyText,
+  value,
+  dot,
+  emptyHint,
 }: {
   label: string;
-  rate: number | null;
-  thin?: boolean;
-  emptyText?: string;
+  value: number | null;
+  dot: string;
+  emptyHint?: string;
 }) {
-  const color = rateColor(rate);
+  const empty = value === null;
+  const num = empty ? null : (value * 100).toFixed(1).replace(/\.0$/, '');
   return (
-    <div className="flex items-center gap-3">
-      <span className="label w-16 shrink-0">{label}</span>
-      <div
-        className={clsx('relative flex-1 overflow-hidden rounded-full', thin ? 'h-1.5' : 'h-3')}
-        style={{ background: 'var(--card-soft)' }}
-        title={rate === null && emptyText ? emptyText : undefined}
-      >
-        {rate !== null && (
-          <div
-            className="absolute inset-y-0 left-0 rounded-full"
-            style={{
-              width: `${Math.min(Math.max(rate, 0), 1) * 100}%`,
-              background: color,
-              transition: 'width 0.8s ease, background 0.8s ease',
-            }}
-          />
-        )}
-        {/* threshold ticks */}
-        <Tick at={VOTE_CRIT} title={`critical < ${Math.round(VOTE_CRIT * 100)}%`} />
-        <Tick at={VOTE_WARN} title={`warn < ${Math.round(VOTE_WARN * 100)}%`} />
-      </div>
-      <span
-        className={clsx('shrink-0 text-right tabular-nums', thin ? 'w-16 text-xs' : 'w-20 text-sm font-semibold')}
-        style={{ color: rate === null ? 'var(--idle)' : 'var(--text-strong)' }}
-      >
-        {rate === null ? '—' : fmtPct(rate)}
-      </span>
+    <div title={empty ? emptyHint : undefined}>
+      <p className="mb-1 flex items-center gap-1.5">
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: empty ? 'var(--idle)' : dot }} />
+        <span className="label">{label}</span>
+      </p>
+      {empty ? (
+        <p className="text-[26px] font-medium leading-none" style={{ color: 'var(--idle)' }}>
+          —
+        </p>
+      ) : (
+        <p className="text-[26px] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
+          {num}
+          <span className="text-sm" style={{ color: 'var(--muted)' }}>
+            %
+          </span>
+        </p>
+      )}
     </div>
   );
 }
 
-function Tick({ at, title }: { at: number; title: string }) {
+/**
+ * tenderduty-style grid, kept honest: one cell is ONE POLL, not a block.
+ * Espresso has no per-block signed/missed stream. Cell color follows the
+ * vote-participation band; an empty bordered cell means that poll returned
+ * no data. Thin vertical lines mark epoch boundaries.
+ */
+function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
+  const recent = samples.slice(-90);
+  if (recent.length === 0) {
+    return <p className="label">collecting polls…</p>;
+  }
   return (
-    <div
-      title={title}
-      className="absolute inset-y-0 w-px"
-      style={{ left: `${at * 100}%`, background: 'var(--border-strong)' }}
-    />
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="label">vote participation · per poll</span>
+        <span className="label">{recent.length} polls</span>
+      </div>
+      <div className="flex items-stretch gap-px">
+        {recent.map((s, i) => {
+          const prev = recent[i - 1];
+          const boundary = prev !== undefined && prev.epoch !== null && s.epoch !== null && prev.epoch !== s.epoch;
+          const time = new Date(s.t).toLocaleTimeString('en-US', { hour12: false });
+          const tip =
+            s.vote === null
+              ? `${time} · no data`
+              : `${time} · epoch ${s.epoch} · vote ${fmtPct(s.vote)}`;
+          return (
+            <div key={s.t} className="flex h-4 flex-1 items-stretch" title={tip}>
+              {boundary && <span className="mr-px w-px shrink-0" style={{ background: 'var(--border-strong)' }} />}
+              <span
+                className="w-full rounded-[2px]"
+                style={
+                  s.vote === null
+                    ? { border: '1px solid var(--border)', background: 'transparent' }
+                    : { background: rateColor(s.vote) }
+                }
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

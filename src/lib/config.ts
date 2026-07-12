@@ -23,6 +23,14 @@ export interface Config {
    * and enables local-down and sync-lag checks.
    */
   localNodeUrl: string | null;
+  /**
+   * Missed-slots thresholds, on the delegator-facing metric Espresso's own
+   * dashboard leads with: missed = 1 - proposal_participation.
+   * Alerts fire when the missed fraction rises ABOVE these.
+   */
+  missedWarn: number;
+  missedCritical: number;
+  /** Secondary vote-participation thresholds (alerts when the rate falls BELOW). */
   voteWarn: number;
   voteCritical: number;
   decideStallSec: number;
@@ -104,6 +112,8 @@ export function loadConfig(): Config {
   cached = {
     networks,
     localNodeUrl: str('LOCAL_NODE_URL') || null,
+    missedWarn: num('MISSED_WARN', 0.5),
+    missedCritical: num('MISSED_CRITICAL', 0.9),
     voteWarn: num('VOTE_WARN', 0.9),
     voteCritical: num('VOTE_CRITICAL', 0.5),
     decideStallSec: num('DECIDE_STALL_SEC', 60),

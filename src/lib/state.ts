@@ -9,6 +9,18 @@ import type { NetworkName } from './config';
 
 export type ValidatorHealth = 'ok' | 'warn' | 'crit' | 'missing' | 'unknown';
 
+/**
+ * One participation poll (POLL_INTERVAL_SEC apart). vote is null when that
+ * poll produced no data (query failed or the key was absent). Espresso has
+ * no per-block signed/missed stream, so the dashboard's grid is honest
+ * about being per-poll, never per-block.
+ */
+export interface PollSample {
+  t: number;
+  epoch: number | null;
+  vote: number | null;
+}
+
 export interface ValidatorView {
   key: string;
   label: string;
@@ -19,10 +31,26 @@ export interface ValidatorView {
   commission: number | null;
   delegatorCount: number | null;
   inActiveSet: boolean | null;
+  /** Secondary/technical signal. */
   vote: number | null;
-  /** Shown on the dashboard only; proposal misses never page. */
+  /** Raw proposal participation rate, 0.0-1.0. */
   proposal: number | null;
+  /**
+   * The delegator-facing headline: 1 - proposal_participation, same formula
+   * as stake.espresso.network. null = no leader slots this epoch yet, which
+   * Espresso renders as a dash and so do we. Never a failure.
+   */
+  missedSlots: number | null;
   health: ValidatorHealth;
+  /** Ring buffer of recent polls for the dashboard grid. */
+  samples: PollSample[];
+}
+
+export const MAX_SAMPLES = 180;
+
+export function pushSample(view: ValidatorView, sample: PollSample): void {
+  view.samples.push(sample);
+  if (view.samples.length > MAX_SAMPLES) view.samples.splice(0, view.samples.length - MAX_SAMPLES);
 }
 
 export interface EndpointView {
