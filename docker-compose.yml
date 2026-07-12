@@ -1,0 +1,8 @@
+services:
+  espressoduty:
+    build: .
+    container_name: espressoduty
+    env_file: .env
+    ports:
+      - '3030:3030'
+    restart: unless-stopped
