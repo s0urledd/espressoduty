@@ -273,7 +273,16 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
     });
   };
 
-  const stripe = v.health === 'missing' ? 'var(--crit)' : rateColor(v.vote);
+  // The stripe reflects overall health, not the raw vote band: vote alone
+  // caps at warn in the health model, and the edge should agree with it.
+  const stripe =
+    v.health === 'missing' || v.health === 'crit'
+      ? 'var(--crit)'
+      : v.health === 'warn'
+        ? 'var(--warn)'
+        : v.health === 'unknown'
+          ? 'var(--idle)'
+          : 'var(--ok)';
   const badge =
     v.inActiveSet === null
       ? { text: 'unknown', color: 'var(--muted)', bg: 'var(--card-soft)' }
@@ -385,7 +394,9 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
         <span className="label">vote participation · per poll</span>
         <span className="label">{recent.length} polls</span>
       </div>
-      <div className="flex items-stretch gap-px">
+      {/* Fixed-width cells, left-aligned: three polls after a restart should
+          look like three small ticks, not three giant bars. */}
+      <div className="flex flex-wrap items-stretch gap-px">
         {recent.map((s, i) => {
           const prev = recent[i - 1];
           const boundary = prev !== undefined && prev.epoch !== null && s.epoch !== null && prev.epoch !== s.epoch;
@@ -395,10 +406,10 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
               ? `${time} · no data`
               : `${time} · epoch ${s.epoch} · vote ${fmtPct(s.vote)}`;
           return (
-            <div key={s.t} className="flex h-4 flex-1 items-stretch" title={tip}>
+            <div key={s.t} className="flex h-4 items-stretch" title={tip}>
               {boundary && <span className="mr-px w-px shrink-0" style={{ background: 'var(--border-strong)' }} />}
               <span
-                className="w-full rounded-[2px]"
+                className="w-1.5 rounded-[2px]"
                 style={
                   s.vote === null
                     ? { border: '1px solid var(--border)', background: 'transparent' }
