@@ -267,6 +267,34 @@ async function fetchParticipation(net: NetworkConfig): Promise<ParticipationBatc
   throw lastErr;
 }
 
+/**
+ * The public query URL is a load balancer over nodes with differing
+ * subjective state: proposal tracking is live-only, so some backends serve
+ * an EMPTY proposal map for an epoch that others have fully tracked
+ * (observed live: map sizes 0,0,0,96,96,0 across six consecutive requests
+ * to the same URL). When the pinned source has no proposal data, probe the
+ * other sources (re-hitting the balancer too) for a backend that does.
+ * Vote stays from the pinned source; only proposal is taken from the probe
+ * and it feeds the per-epoch hold, so the value appears once and sticks.
+ */
+async function probeProposal(net: NetworkConfig): Promise<ParticipationMap | null> {
+  const bases = participationSources(net);
+  const attempts = bases.flatMap((b) => (b === cfg.localNodeUrl ? [b] : [b, b]));
+  for (const base of attempts) {
+    try {
+      const map = await EspressoClient.getFrom<ParticipationMap>(
+        base,
+        'node/participation/proposal/current',
+        8000,
+      );
+      if (Object.keys(map).length > 0) return map;
+    } catch {
+      /* try the next backend */
+    }
+  }
+  return null;
+}
+
 async function pollParticipation(net: NetworkConfig): Promise<void> {
   const m = machines.get(net.name)!;
   let batch: ParticipationBatch;
@@ -280,9 +308,21 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     publish();
     return;
   }
-  const { stakeTable, voteMap, proposalMap, source } = batch;
+  const { stakeTable, voteMap, source } = batch;
+  let { proposalMap } = batch;
   m.lastPartSource = source;
   for (const ev of m.view.endpoints) ev.isActive = ev.url === source;
+
+  // Pinned source has no proposal tracking for this epoch: look for a
+  // backend that does, but only while a watched key still lacks a held
+  // value (once held, the probe would add nothing).
+  if (Object.keys(proposalMap).length === 0) {
+    const needProposal = m.view.validators.some((vv) => m.validators.get(vv.key)!.heldProposal === null);
+    if (needProposal) {
+      const probed = await probeProposal(net);
+      if (probed) proposalMap = probed;
+    }
+  }
 
   const epoch = stakeTable.epoch;
   const stakeByKey = new Map(
@@ -330,9 +370,10 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     if (stakeHex) vv.stakeEsp = hexStakeToEsp(stakeHex);
     vv.vote = vote;
     vv.proposal = proposal;
-    // Espresso's headline metric. null = no leader slots this epoch yet,
-    // rendered as a dash like stake.espresso.network does. Not a failure.
-    vv.missedSlots = proposal === null ? null : 1 - proposal;
+    // Espresso's headline metric, always numeric: with no proposal data for
+    // the key this epoch there are no known missed slots, which is 0%.
+    // Alerting still keys off real proposal data only (vv.proposal).
+    vv.missedSlots = proposal === null ? 0 : 1 - proposal;
     pushSample(vv, { t: Date.now(), epoch, vote });
 
     if (vote === null) {
@@ -360,9 +401,12 @@ const NEAR_ZERO_VOTE = 0.05;
 function healthOf(vv: ValidatorView, vm: ValidatorMachine): ValidatorView['health'] {
   if (vm.missingAlerted || (vm.missingCount >= 2 && vm.initialized)) return 'missing';
   if (vv.vote === null) return 'unknown';
-  if (vv.missedSlots !== null) {
-    if (vv.missedSlots > cfg.missedCritical) return 'crit';
-    if (vv.missedSlots > cfg.missedWarn) return 'warn';
+  // Branch on real proposal data, not the displayed missed value: with no
+  // data, missed shows an assumed 0% which must not drive health.
+  if (vv.proposal !== null) {
+    const missed = 1 - vv.proposal;
+    if (missed > cfg.missedCritical) return 'crit';
+    if (missed > cfg.missedWarn) return 'warn';
     return vv.vote < cfg.voteWarn ? 'warn' : 'ok';
   }
   if (vv.vote < NEAR_ZERO_VOTE && vv.inActiveSet === true) return 'crit';
@@ -406,7 +450,9 @@ async function onValidatorPresent(
   vm.missingCount = 0;
   vm.missingSince = null;
 
-  const missed = vv.missedSlots;
+  // Real proposal data only: the assumed 0% shown when data is absent must
+  // never drive alerts or recoveries.
+  const missed = vv.proposal === null ? null : 1 - vv.proposal;
   const missedStatus: Level | null =
     missed === null ? null : missed > cfg.missedCritical ? 'crit' : missed > cfg.missedWarn ? 'warn' : 'ok';
   const voteStatus: Level = vote < cfg.voteCritical ? 'crit' : vote < cfg.voteWarn ? 'warn' : 'ok';

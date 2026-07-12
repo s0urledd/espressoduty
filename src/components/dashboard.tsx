@@ -20,9 +20,8 @@ const VOTE_CRIT = Number(process.env.NEXT_PUBLIC_VOTE_CRITICAL ?? 0.5);
 const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
 const MISSED_CRIT = Number(process.env.NEXT_PUBLIC_MISSED_CRITICAL ?? 0.9);
 
-// Espresso's own tooltip wording for a dash in the missed-slots column.
 const NO_SLOTS_HINT =
-  'The validator has not yet proposed any blocks, or may not be actively participating in consensus for the current epoch';
+  'No proposal data for this epoch yet (no leader slots observed), so nothing is known to be missed';
 
 function rateColor(rate: number | null): string {
   if (rate === null) return 'var(--idle)';
@@ -317,12 +316,17 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
         </button>
       </div>
 
-      {/* Big number + status dot per metric; missed slots is Espresso's
-          headline (1 - proposal_participation, like stake.espresso.network) */}
-      <div className="mb-4 grid grid-cols-3 gap-4">
+      {/* Big number + status dot per metric. Missed slots is Espresso's
+          headline (1 - proposal_participation); with no proposal data for
+          the epoch there is nothing known to be missed, shown as 0%. */}
+      <div className="mb-4 grid grid-cols-2 gap-4">
         <Metric label="vote" value={v.vote} dot={rateColor(v.vote)} />
-        <Metric label="proposal" value={v.proposal} dot={rateColor(v.proposal)} emptyHint={NO_SLOTS_HINT} />
-        <Metric label="missed slots" value={v.missedSlots} dot={missedColor(v.missedSlots)} emptyHint={NO_SLOTS_HINT} />
+        <Metric
+          label="missed slots"
+          value={v.missedSlots}
+          dot={missedColor(v.missedSlots)}
+          hint={v.proposal === null ? NO_SLOTS_HINT : undefined}
+        />
       </div>
 
       <PollGrid samples={v.samples} />
@@ -341,22 +345,22 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
   );
 }
 
-/** Colored status dot, small label, big number. Dash when there is no data. */
+/** Colored status dot, small label, big number. Dash only before the first poll. */
 function Metric({
   label,
   value,
   dot,
-  emptyHint,
+  hint,
 }: {
   label: string;
   value: number | null;
   dot: string;
-  emptyHint?: string;
+  hint?: string;
 }) {
   const empty = value === null;
   const num = empty ? null : (value * 100).toFixed(1).replace(/\.0$/, '');
   return (
-    <div title={empty ? emptyHint : undefined}>
+    <div title={hint}>
       <p className="mb-1 flex items-center gap-1.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: empty ? 'var(--idle)' : dot }} />
         <span className="label">{label}</span>
@@ -380,11 +384,12 @@ function Metric({
 /**
  * tenderduty-style grid, kept honest: one cell is ONE POLL, not a block.
  * Espresso only exposes the cumulative epoch average, so a cell is colored
- * by what happened DURING that poll window: the average climbing between
- * two polls means the node was voting right then (green), falling or flat
- * on a low average means it was missing views (band color). A cell with a
- * healthy average is green regardless. Empty bordered cell = no data;
- * thin vertical lines mark epoch boundaries.
+ * purely by the trend during that poll window: the average climbing, by
+ * however little, means the node voted right then (green); falling or not
+ * climbing means it missed views (red). A saturated average (~100%) stays
+ * green when flat, since there is no room left to climb. The first cell of
+ * an epoch has no trend and renders neutral; an empty bordered cell means
+ * that poll returned no data. Thin vertical lines mark epoch boundaries.
  */
 function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
   const recent = samples.slice(-90);
@@ -406,17 +411,24 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
           const time = new Date(s.t).toLocaleTimeString('en-US', { hour12: false });
           const sameEpochPrev =
             prev !== undefined && prev.vote !== null && prev.epoch === s.epoch ? prev.vote : null;
-          const rising = s.vote !== null && sameEpochPrev !== null && s.vote > sameEpochPrev + 0.0001;
-          const falling = s.vote !== null && sameEpochPrev !== null && s.vote < sameEpochPrev - 0.0001;
+          const rising = s.vote !== null && sameEpochPrev !== null && s.vote > sameEpochPrev + 1e-6;
+          const saturated = s.vote !== null && s.vote >= 0.995;
           const color =
             s.vote === null
               ? null
-              : s.vote >= VOTE_WARN || rising
-                ? 'var(--ok)'
-                : s.vote >= VOTE_CRIT && !falling
-                  ? 'var(--warn)'
+              : sameEpochPrev === null
+                ? saturated
+                  ? 'var(--ok)'
+                  : 'var(--idle)'
+                : rising || saturated
+                  ? 'var(--ok)'
                   : 'var(--crit)';
-          const trend = rising ? ' ↑ voting' : falling ? ' ↓ missing views' : '';
+          const trend =
+            s.vote === null || sameEpochPrev === null
+              ? ''
+              : rising || saturated
+                ? ' ↑ voting'
+                : ' ↓ missing views';
           const tip =
             s.vote === null
               ? `${time} · no data`
