@@ -11,11 +11,10 @@ Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
 events.
 
 Works with no node at all against the public query service. Point
-`LOCAL_NODE_URL` at your own node to add reachability and sync-lag checks;
-status reads then come from your node first. Participation metrics always
-come from the public query service: each node reports its own subjective
-view of participation, and the public view is the one closest to what
-delegators see.
+`LOCAL_NODE_URL` at your own node to add reachability and sync-lag checks.
+Each poll reads all participation metrics from a single source: your node
+when it is reachable and in sync, the public endpoints otherwise — never a
+mix, and never an out-of-sync node.
 
 ![dashboard, light theme](docs/dashboard-light.png)
 
@@ -46,11 +45,17 @@ Rules that keep it quiet:
 - Nothing fires on the first poll after a restart, repeats respect a cooldown,
   and every alert has a matching recovery with the worst value and duration.
 - A key absent from the proposal map shows a dash, like stake.espresso.network.
-  Not being leader this epoch is not a failure and never alerts.
-- Participation rates reset at each epoch, so threshold alerts skip the first
-  few samples after a rollover.
+  Not being leader this epoch is not a failure and never alerts. Once a real
+  value has been seen, it is held for the rest of the epoch so one incomplete
+  poll cannot flip the card back to a dash.
+- Participation rates reset at each epoch, so threshold alerts are suppressed
+  for the first `EPOCH_MIN_SAMPLE_MIN` minutes after a rollover.
 - While the local node is down or lagging, participation alerts stay quiet:
-  the local-node alert is the root cause.
+  the local-node alert is the root cause. Missed-slots alerts stay quiet for
+  the rest of that epoch — the cumulative average keeps reporting slots lost
+  during the outage, which nobody can act on anymore.
+- The local node counts as down only after `LOCAL_DOWN_FAILS` consecutive
+  failed checks; one slow response from a busy node is not an outage.
 - A chain-stall alert is cross-checked against the other endpoints first, so a
   stale endpoint doesn't masquerade as a network halt.
 - PagerDuty pages only on missed slots (after `PAGERDUTY_THRESHOLD`
@@ -111,11 +116,11 @@ against the node's own API reference:
   "wrong key".
 - `status/block-height`, `status/time-since-last-decide`: liveness.
 
-Participation numbers are subjective per serving node, which is why they are
-read from the public endpoints rather than your own node. They can still
-differ from stake.espresso.network, whose missed-slots column comes from a
-separate streaming aggregator with its own observation window; the
-definition is the same, the window is not.
+Participation numbers are subjective per serving node, which is why every
+poll is served by one source and an out-of-sync local node is never used.
+Values can still differ from stake.espresso.network, whose missed-slots
+column comes from a separate streaming aggregator with its own observation
+window; the definition is the same, the window is not.
 
 State lives in memory: a restart starts clean, which is also why the first
 poll never alerts.
