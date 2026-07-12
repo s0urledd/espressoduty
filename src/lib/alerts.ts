@@ -135,16 +135,14 @@ async function sendPagerDuty(ev: AlertEvent): Promise<void> {
 }
 
 /**
- * Fan an event out to every configured channel. PagerDuty is only touched
- * when the event explicitly carries a trigger/resolve action.
+ * Fan an event out to the configured chat channels. Events carrying a
+ * PagerDuty trigger/resolve action go to PagerDuty only: the chat channels
+ * already received the human-facing alert, repeating it is just noise.
  */
 export async function sendAlert(ev: AlertEvent): Promise<void> {
-  const results = await Promise.allSettled([
-    sendTelegram(ev),
-    sendDiscord(ev),
-    sendSlack(ev),
-    sendPagerDuty(ev),
-  ]);
+  const results = await Promise.allSettled(
+    ev.pagerduty ? [sendPagerDuty(ev)] : [sendTelegram(ev), sendDiscord(ev), sendSlack(ev)],
+  );
   const label = `${ev.severity}: ${ev.title}`;
   const failed = results.filter((r) => r.status === 'rejected').length;
   console.log(`[alerts] ${label}${failed ? ` (${failed} channel(s) failed)` : ''}`);

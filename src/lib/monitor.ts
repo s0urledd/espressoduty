@@ -78,9 +78,29 @@ function pct(x: number | null | undefined): string {
   return x === null || x === undefined ? 'n/a' : `${(x * 100).toFixed(2)}%`;
 }
 
-function mins(fromMs: number): string {
-  const m = Math.round((Date.now() - fromMs) / 60_000);
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+/** Thresholds read better without trailing zeros: 0.5 -> 50%, 0.925 -> 92.5%. */
+function pctClean(x: number): string {
+  const v = x * 100;
+  return `${Number.isInteger(v) ? v : v.toFixed(1)}%`;
+}
+
+function dur(fromMs: number): string {
+  const s = Math.max(1, Math.round((Date.now() - fromMs) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/**
+ * While the operator's node is down or lagging, participation alerts are
+ * suppressed: the local-node alert is the root cause and a syncing node's
+ * participation data is stale anyway. Recoveries still fire.
+ */
+function localNodeUnhealthy(): boolean {
+  const ln = getStore().localNode;
+  if (!ln) return false;
+  return ln.reachable === false || (ln.lagBlocks !== null && ln.lagBlocks > cfg.heightLagBlocks);
 }
 
 function explorerLink(net: NetworkConfig): AlertEvent['link'] {
@@ -183,7 +203,7 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
   m.view.epoch = epoch;
   m.view.lastPollAt = Date.now();
 
-  const inGrace = m.epochGraceLeft > 0;
+  const suppressed = m.epochGraceLeft > 0 || localNodeUnhealthy();
   if (m.epochGraceLeft > 0) m.epochGraceLeft -= 1;
 
   for (const vv of m.view.validators) {
@@ -198,9 +218,9 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     vv.proposal = Object.prototype.hasOwnProperty.call(proposalMap, vv.key) ? proposalMap[vv.key] : null;
 
     if (vote === null) {
-      await onValidatorMissing(net, m, vv, vm, epoch);
+      await onValidatorMissing(net, m, vv, vm, epoch, suppressed);
     } else {
-      await onValidatorPresent(net, vv, vm, vote, epoch, inGrace);
+      await onValidatorPresent(net, vv, vm, vote, epoch, suppressed);
     }
     vv.health = healthOf(vv, vm);
     vm.initialized = true;
@@ -223,17 +243,17 @@ async function onValidatorPresent(
   vm: ValidatorMachine,
   vote: number,
   epoch: number,
-  inGrace: boolean,
+  suppressed: boolean,
 ): Promise<void> {
   // Return from "missing from the participation map".
   if (vm.missingAlerted) {
     vm.missingAlerted = false;
     await sendAlert({
       severity: 'recovered',
-      title: `${vv.label} is back in the participation map`,
+      title: `${vv.label} back in the participation map`,
       lines: [
-        `Validator reappeared after ${vm.missingSince ? mins(vm.missingSince) : '?'}.`,
-        `Current vote participation: ${pct(vote)} (epoch ${epoch})`,
+        `Gone for ${vm.missingSince ? dur(vm.missingSince) : '?'}`,
+        `Vote participation: ${pct(vote)} (epoch ${epoch})`,
       ],
       network: net.name,
       link: explorerLink(net),
@@ -245,17 +265,18 @@ async function onValidatorPresent(
   const status: ValidatorMachine['voteStatus'] =
     vote < cfg.voteCritical ? 'crit' : vote < cfg.voteWarn ? 'warn' : 'ok';
 
+  if (!vm.initialized || suppressed) {
+    // Seed state silently; recoveries still pair with earlier alerts.
+    vm.pdConsecutiveCrit = 0;
+    if (status === 'ok') await maybeVoteRecovery(net, vv, vm, vote, epoch);
+    vm.voteStatus = status;
+    return;
+  }
+
   if (status === 'crit') {
     vm.pdConsecutiveCrit += 1;
   } else {
     vm.pdConsecutiveCrit = 0;
-  }
-
-  if (!vm.initialized || inGrace) {
-    // Seed state silently; recoveries still pair with earlier alerts.
-    if (status === 'ok') await maybeVoteRecovery(net, vv, vm, vote, epoch);
-    vm.voteStatus = status;
-    return;
   }
 
   if (status !== 'ok') {
@@ -271,10 +292,8 @@ async function onValidatorPresent(
             ? `${vv.label} vote participation critical`
             : `${vv.label} vote participation low`,
         lines: [
-          `Vote participation is ${pct(vote)} in epoch ${epoch} (threshold: ${pct(
-            status === 'crit' ? cfg.voteCritical : cfg.voteWarn,
-          )}).`,
-          `Downtime costs rewards and delegator confidence — check the node.`,
+          `Epoch ${epoch} vote participation: ${pct(vote)}`,
+          `Threshold: ${pctClean(status === 'crit' ? cfg.voteCritical : cfg.voteWarn)}`,
         ],
         network: net.name,
         link: explorerLink(net),
@@ -285,7 +304,7 @@ async function onValidatorPresent(
       await sendAlert({
         severity: 'critical',
         title: `${vv.label} vote participation critical`,
-        lines: [`${vm.pdConsecutiveCrit} consecutive critical polls, participation ${pct(vote)}.`],
+        lines: [`${vm.pdConsecutiveCrit} critical polls in a row, participation ${pct(vote)}`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:vote`,
         pagerduty: 'trigger',
@@ -312,10 +331,8 @@ async function maybeVoteRecovery(
     severity: 'recovered',
     title: `${vv.label} vote participation recovered`,
     lines: [
-      `Back to ${pct(vote)} in epoch ${epoch}.`,
-      `Lowest during incident: ${pct(vm.voteLowest)}${
-        vm.voteIncidentStart ? `, duration ${mins(vm.voteIncidentStart)}` : ''
-      }.`,
+      `Back to ${pct(vote)} in epoch ${epoch}`,
+      `Lowest: ${pct(vm.voteLowest)}${vm.voteIncidentStart ? `, down for ${dur(vm.voteIncidentStart)}` : ''}`,
     ],
     network: net.name,
   });
@@ -324,7 +341,7 @@ async function maybeVoteRecovery(
     await sendAlert({
       severity: 'recovered',
       title: `${vv.label} vote participation recovered`,
-      lines: [`Participation back to ${pct(vote)}.`],
+      lines: [`Participation back to ${pct(vote)}`],
       network: net.name,
       dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:vote`,
       pagerduty: 'resolve',
@@ -340,12 +357,13 @@ async function onValidatorMissing(
   vv: ValidatorView,
   vm: ValidatorMachine,
   epoch: number,
+  suppressed: boolean,
 ): Promise<void> {
   vm.missingCount += 1;
-  if (!vm.initialized) return;
+  if (!vm.initialized || suppressed) return;
   if (vm.missingCount < 2 || vm.missingAlerted) return; // require 2 consecutive polls to avoid flapping
 
-  let classification = 'not found in the validator registry — double-check the configured key';
+  let classification = 'not in the validator registry, check the configured key';
   try {
     const info = await m.client.findInAllValidators(epoch, vv.key);
     if (info) {
@@ -353,7 +371,7 @@ async function onValidatorMissing(
       vv.account = info.account;
     }
   } catch {
-    classification = 'classification lookup failed; the key is absent from the current participation map';
+    classification = 'registry lookup failed';
   }
 
   vm.missingAlerted = true;
@@ -362,11 +380,7 @@ async function onValidatorMissing(
     await sendAlert({
       severity: 'critical',
       title: `${vv.label} missing from the participation map`,
-      lines: [
-        `The key is not present in epoch ${epoch}'s vote participation map.`,
-        `Status: ${classification}.`,
-        `Possible causes: dropped from the active set, deregistered, or a wrong key in the config.`,
-      ],
+      lines: [`Not in the epoch ${epoch} vote participation map`, `Status: ${classification}`],
       network: net.name,
       link: explorerLink(net),
     });
@@ -440,17 +454,14 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
       await sendAlert({
         severity: secondarySeesProgress ? 'warning' : 'critical',
         title: secondarySeesProgress
-          ? `Query endpoint is stale on ${net.name}`
+          ? `Query endpoint stale on ${net.name}`
           : `No decide for ${Math.round(tsld)}s on ${net.name}`,
         lines: secondarySeesProgress
           ? [
-              `The active query endpoint reports ${Math.round(tsld)}s since the last decide, but another endpoint sees the chain advancing.`,
-              `This points at the endpoint (or a rate limit), not the network. Switched to the healthy endpoint.`,
+              `Active endpoint reports ${Math.round(tsld)}s since the last decide, another endpoint is advancing`,
+              `Switched endpoints. Likely a rate limit or endpoint issue, not the network`,
             ]
-          : [
-              `time-since-last-decide is ${Math.round(tsld)}s (threshold ${cfg.decideStallSec}s) and no configured endpoint sees progress.`,
-              `HotShot consensus may be stalled.`,
-            ],
+          : [`Threshold: ${cfg.decideStallSec}s`, `No configured endpoint sees progress, consensus may be stalled`],
         network: net.name,
         link: explorerLink(net),
       });
@@ -459,7 +470,7 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
         await sendAlert({
           severity: 'critical',
           title: `Chain stall on ${net.name}`,
-          lines: [`No decide for ${Math.round(tsld)}s.`],
+          lines: [`No decide for ${Math.round(tsld)}s`],
           network: net.name,
           dedupKey: `espressoduty:${net.name}:stall`,
           pagerduty: 'trigger',
@@ -472,9 +483,7 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
       await sendAlert({
         severity: 'recovered',
         title: `Decides resumed on ${net.name}`,
-        lines: [
-          `time-since-last-decide is back to ${Math.round(tsld)}s${m.stallSince ? ` after ${mins(m.stallSince)}` : ''}.`,
-        ],
+        lines: [`Last decide ${Math.round(tsld)}s ago${m.stallSince ? `, stalled for ${dur(m.stallSince)}` : ''}`],
         network: net.name,
       });
       if (m.stallPdTriggered) {
@@ -482,7 +491,7 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
         await sendAlert({
           severity: 'recovered',
           title: `Chain stall resolved on ${net.name}`,
-          lines: ['Decides resumed.'],
+          lines: ['Decides resumed'],
           network: net.name,
           dedupKey: `espressoduty:${net.name}:stall`,
           pagerduty: 'resolve',
@@ -514,7 +523,7 @@ async function pollLocalNode(): Promise<void> {
       await sendAlert({
         severity: 'recovered',
         title: 'Local node back online',
-        lines: [`${cfg.localNodeUrl} is reachable again${lm.downSince ? ` after ${mins(lm.downSince)}` : ''}.`],
+        lines: [`Reachable again${lm.downSince ? `, down for ${dur(lm.downSince)}` : ''}`],
       });
       lm.downSince = null;
     }
@@ -536,8 +545,8 @@ async function pollLocalNode(): Promise<void> {
             lm.lagAlerted = true;
             await sendAlert({
               severity: 'warning',
-              title: 'Local node is falling behind',
-              lines: [`Local height ${height} vs network ${remoteHeight} — ${lag} blocks behind (threshold ${cfg.heightLagBlocks}).`],
+              title: 'Local node falling behind',
+              lines: [`${lag} blocks behind (local ${height}, network ${remoteHeight})`, `Threshold: ${cfg.heightLagBlocks} blocks`],
             });
           }
         } else if (lm.lagAlerted) {
@@ -545,7 +554,7 @@ async function pollLocalNode(): Promise<void> {
           await sendAlert({
             severity: 'recovered',
             title: 'Local node caught up',
-            lines: [`Local height ${height}, ${Math.max(lag, 0)} blocks behind the network.`],
+            lines: [`${Math.max(lag, 0)} blocks behind at height ${height}`],
           });
         }
       }
@@ -562,7 +571,7 @@ async function pollLocalNode(): Promise<void> {
         await sendAlert({
           severity: 'critical',
           title: 'Local node unreachable',
-          lines: [`${cfg.localNodeUrl} failed ${lm.failCount} consecutive checks.`],
+          lines: [`${cfg.localNodeUrl} is not responding`],
         });
       }
     }
@@ -611,18 +620,16 @@ export function startMonitoring(): void {
   }
 
   const watched = cfg.networks
-    .map((n) => `${n.name}: ${n.validators.map((v) => v.label).join(', ')}`)
-    .join(' | ');
+    .map((n) => `${n.validators.map((v) => v.label).join(', ')} (${n.name})`)
+    .join(', ');
   void sendAlert({
     severity: 'info',
     title: 'espressoduty started',
     lines: [
-      watched ? `Watching — ${watched}` : 'No validators configured yet.',
-      `Poll interval: ${cfg.pollIntervalSec}s, status: ${cfg.statusPollIntervalSec}s.`,
-      `Channels: ${store.channels.join(', ') || 'none'}.`,
-      cfg.localNodeUrl
-        ? `Reading from local node first (${cfg.localNodeUrl}), public query nodes as fallback.`
-        : 'Reading from the public query service.',
+      watched ? `Watching: ${watched}` : 'No validators configured yet',
+      `Poll: ${cfg.pollIntervalSec}s, status: ${cfg.statusPollIntervalSec}s`,
+      `Channels: ${store.channels.join(', ') || 'none'}`,
+      cfg.localNodeUrl ? 'Source: local node, public fallback' : 'Source: public query service',
     ],
   });
 }
@@ -635,7 +642,7 @@ export async function stopMonitoring(reason: string): Promise<void> {
     sendAlert({
       severity: 'warning',
       title: 'espressoduty shutting down',
-      lines: [`Received ${reason}. Monitoring and alerting stop until the process is back.`],
+      lines: [`Received ${reason}, monitoring stops until restart`],
     }),
     new Promise((r) => setTimeout(r, 5000)),
   ]);
