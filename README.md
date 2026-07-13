@@ -53,6 +53,21 @@ While the local node is down or lagging, the miss counter freezes: the
 local-node alert is the root cause, participation dips are its symptom.
 Every alert has a paired recovery and repeats respect a cooldown.
 
+And for the one failure espressoduty cannot report itself — its own death —
+set `HEARTBEAT_URL`: a GET fires after every successful poll, and a service
+like [healthchecks.io](https://healthchecks.io) or
+[Uptime Kuma](https://github.com/louislam/uptime-kuma) alerts you when the
+pings stop.
+
+## Local vs public mode
+
+- **Local mode** (`LOCAL_NODE_URL` set): exact missed-slot counts from your
+  node's Prometheus counters (`0 / 35`), instant stuck detection via the
+  decide-view counter, plus the node-down and sync-lag alerts.
+- **Public-only mode**: the missed count is derived from the proposal rate,
+  and a dead node only shows up as a participation drop — delayed, but no
+  node-side setup needed.
+
 ## Quick start
 
 ```bash
@@ -84,6 +99,7 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `3` / `50` | Local node monitoring |
 | `LOCAL_DOWN_PAGE_MIN` / `STUCK_AFTER_MIN` | `10` / `5` | Minutes before down pages / stuck alerts |
 | `POLL_INTERVAL_SEC` | `60` | Poll cadence |
+| `HEARTBEAT_URL` | — | Dead man's switch: GET after every successful poll |
 | `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, `PAGERDUTY_ROUTING_KEY` | — | Channels |
 
@@ -98,10 +114,7 @@ row. Below, a 50-slot leader-duty grid: one cell per poll, red when
 the rate fell in that window (missed leader slot), green when it rose or
 held steady (duty intact), faint until the epoch has proposal data, empty
 when the poll returned no data. Thin lines mark epoch boundaries. The grid
-and counters survive restarts via `STATE_FILE`. In the status line,
-`decide` is the seconds since the network finalized a block (a HotShot
-"decide"): 1-2s is normal, sustained growth means the network or the
-serving endpoint has a problem.
+and counters survive restarts via `STATE_FILE`.
 
 Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
 as on stake.espresso.network). Proposal tracking is live-only per node and

@@ -366,6 +366,21 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
 
   persistAll();
   publish();
+  pingHeartbeat();
+}
+
+/**
+ * Dead man's switch: a fire-and-forget GET after every successful poll
+ * cycle. The receiving service (healthchecks.io, Uptime Kuma, ...) alerts
+ * when the pings stop — the one failure espressoduty can't report itself.
+ */
+function pingHeartbeat(): void {
+  if (!cfg.heartbeatUrl) return;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10_000);
+  fetch(cfg.heartbeatUrl, { signal: ctrl.signal, cache: 'no-store' })
+    .catch(() => {})
+    .finally(() => clearTimeout(timer));
 }
 
 /** Write every validator's counter + recent samples to STATE_FILE. */

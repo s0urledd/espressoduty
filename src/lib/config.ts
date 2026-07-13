@@ -51,6 +51,12 @@ export interface Config {
   pollIntervalSec: number;
   /** Lightweight status poll (block height, time-since-last-decide) driving the live dashboard. */
   statusPollIntervalSec: number;
+  /**
+   * Dead man's switch. When set, a GET fires here after every successful
+   * poll cycle; the receiving service (healthchecks.io, Uptime Kuma, ...)
+   * alerts when the pings stop — i.e. when espressoduty itself died.
+   */
+  heartbeatUrl: string;
   telegramBotToken: string;
   telegramChatId: string;
   discordWebhookUrl: string;
@@ -140,6 +146,7 @@ export function loadConfig(): Config {
     alertCooldownMin: num('ALERT_COOLDOWN_MIN', 30),
     pollIntervalSec: Math.max(15, num('POLL_INTERVAL_SEC', 60)),
     statusPollIntervalSec: Math.max(5, num('STATUS_POLL_INTERVAL_SEC', 10)),
+    heartbeatUrl: str('HEARTBEAT_URL'),
     telegramBotToken: str('TELEGRAM_BOT_TOKEN'),
     telegramChatId: str('TELEGRAM_CHAT_ID'),
     discordWebhookUrl: str('DISCORD_WEBHOOK_URL'),
