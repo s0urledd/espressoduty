@@ -95,8 +95,8 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | `MAINNET_VALIDATORS` | — | `Label=0xaddress` or `Label=BLS_VER_KEY~...`, comma separated |
 | `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
 | `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
-| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `1` / `3` | Missed leader slots: chat / PagerDuty |
-| `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `3` / `50` | Local node monitoring |
+| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `3` / `5` | Missed leader slots: chat / PagerDuty |
+| `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `5` / `50` | Local node monitoring |
 | `LOCAL_DOWN_PAGE_MIN` / `STUCK_AFTER_MIN` | `10` / `5` | Minutes before down pages / stuck alerts |
 | `POLL_INTERVAL_SEC` | `60` | Poll cadence |
 | `HEARTBEAT_URL` | — | Dead man's switch: GET after every successful poll |
