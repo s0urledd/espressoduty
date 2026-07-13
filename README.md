@@ -51,6 +51,7 @@ Also watched:
 | Validator missing from the participation map (dropped from set / wrong key) | critical, pages |
 | No decide for 60s, cross-checked against other endpoints first | critical (warning if only the endpoint is stale) |
 | Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails) / lagging (`HEIGHT_LAG_BLOCKS`) | critical / warning |
+| Node consensus stuck: reachable but `last_decided_view` frozen while the network progresses (needs a local node with metrics) | critical, pages |
 | Start / shutdown | info |
 
 While the local node is down or lagging, the miss counter freezes: the
@@ -79,7 +80,7 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 |---|---|---|
 | `MAINNET_VALIDATORS` | — | `Label=BLS_VER_KEY~...`, comma separated |
 | `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
-| `LOCAL_NODE_URL` | — | Your node's query service, enables local checks |
+| `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
 | `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `2` / `3` | Missed leader slots in a row |
 | `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `3` / `50` | Local node monitoring |
 | `POLL_INTERVAL_SEC` | `60` | Poll cadence |
@@ -89,8 +90,11 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 ## Dashboard
 
 Each validator card leads with uptime (proposal participation, the positive
-pole of missed slots; vote participation sits as a small neutral figure in
-the stats row), and a 50-slot leader-duty grid: one cell per poll, red when
+pole of missed slots). The stats row shows exact counts from your node's
+metrics when a local node is configured (`missed 0/11 slots`, since node
+start) or the miss events observed this epoch otherwise, plus vote
+participation as a small neutral figure. Below it, a 50-slot leader-duty
+grid: one cell per poll, red when
 the rate fell in that window (missed leader slot), green when it rose or
 held steady (duty intact), faint until the epoch has proposal data, empty
 when the poll returned no data. Thin lines mark epoch boundaries. The grid

@@ -45,6 +45,11 @@ export interface ValidatorView {
    * missed, so it reads 0. Alerting keys off real proposal data only.
    */
   missedSlots: number | null;
+  /** Exact counts from the node's own metrics (since node start); null without a local node. */
+  leaderSlots: number | null;
+  missedLeaderSlots: number | null;
+  /** Miss events observed this epoch (either data path). */
+  epochMissCount: number;
   health: ValidatorHealth;
   /** Ring buffer of recent polls for the dashboard grid. */
   samples: PollSample[];
@@ -78,6 +83,10 @@ export interface LocalNodeView {
   reachable: boolean | null;
   height: number | null;
   lagBlocks: number | null;
+  /** consensus_last_decided_view from the node's metrics, when available. */
+  lastDecidedView: number | null;
+  /** True while the node responds but its view number is not advancing. */
+  stuck: boolean;
 }
 
 export interface Snapshot {
