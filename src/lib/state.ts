@@ -47,7 +47,7 @@ export interface ValidatorView {
   samples: PollSample[];
 }
 
-export const MAX_SAMPLES = 180;
+export const MAX_SAMPLES = 50;
 
 export function pushSample(view: ValidatorView, sample: PollSample): void {
   view.samples.push(sample);

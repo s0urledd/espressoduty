@@ -24,19 +24,24 @@ export interface Config {
    */
   localNodeUrl: string | null;
   /**
-   * Missed-slots thresholds, on the delegator-facing metric Espresso's own
-   * dashboard leads with: missed = 1 - proposal_participation.
-   * Alerts fire when the missed fraction rises ABOVE these.
+   * Participation alerting is trend-based: a "red poll" is one where the
+   * epoch average did not climb (the node missed views in that window),
+   * the same rule the dashboard grid uses. Chat channels alert after
+   * consecutiveDropsWarn red polls in a row; PagerDuty pages after
+   * consecutiveDropsCrit.
+   */
+  consecutiveDropsWarn: number;
+  consecutiveDropsCrit: number;
+  /**
+   * Display thresholds only (dashboard colors and card health), never
+   * alerts: missed slots colors when ABOVE, vote when BELOW.
    */
   missedWarn: number;
   missedCritical: number;
-  /** Secondary vote-participation thresholds (alerts when the rate falls BELOW). */
   voteWarn: number;
   voteCritical: number;
   decideStallSec: number;
   heightLagBlocks: number;
-  /** Suppress absolute-rate alerts for this many minutes after an epoch rollover. */
-  epochMinSampleMin: number;
   /** Consecutive failed checks before the local node counts as down. */
   localDownFails: number;
   /** Timeout for status/health probes; a busy node can be slow without being down. */
@@ -51,7 +56,6 @@ export interface Config {
   discordWebhookUrl: string;
   slackWebhookUrl: string;
   pagerdutyRoutingKey: string;
-  pagerdutyThreshold: number;
 }
 
 function str(name: string, def = ''): string {
@@ -94,37 +98,28 @@ export function loadConfig(): Config {
 
   const networks: NetworkConfig[] = [];
   const mainnetValidators = parseValidators('MAINNET_VALIDATORS');
+  // QUERY_NODE accepts a comma-separated list; extra entries are failover.
+  const queryNodes = list('QUERY_NODE').length > 0 ? list('QUERY_NODE') : list('MAINNET_QUERY_NODES');
   if (mainnetValidators.length > 0) {
     networks.push({
       name: 'mainnet',
       validators: mainnetValidators,
-      queryNodes:
-        list('MAINNET_QUERY_NODES').length > 0
-          ? list('MAINNET_QUERY_NODES')
-          : ['https://query.main.net.espresso.network/v1'],
+      queryNodes: queryNodes.length > 0 ? queryNodes : ['https://query.main.net.espresso.network/v1'],
       explorerUrl: str('MAINNET_EXPLORER_URL', 'https://explorer.main.net.espresso.network'),
-    });
-  }
-  const testnetValidators = parseValidators('TESTNET_VALIDATORS');
-  if (testnetValidators.length > 0 && list('TESTNET_QUERY_NODES').length > 0) {
-    networks.push({
-      name: 'testnet',
-      validators: testnetValidators,
-      queryNodes: list('TESTNET_QUERY_NODES'),
-      explorerUrl: str('TESTNET_EXPLORER_URL', 'https://explorer.decaf.testnet.espresso.network'),
     });
   }
 
   cached = {
     networks,
     localNodeUrl: str('LOCAL_NODE_URL') || null,
+    consecutiveDropsWarn: Math.max(2, num('CONSECUTIVE_DROPS_WARN', 3)),
+    consecutiveDropsCrit: Math.max(3, num('CONSECUTIVE_DROPS_CRIT', 5)),
     missedWarn: num('MISSED_WARN', 0.5),
     missedCritical: num('MISSED_CRITICAL', 0.9),
     voteWarn: num('VOTE_WARN', 0.9),
     voteCritical: num('VOTE_CRITICAL', 0.5),
     decideStallSec: num('DECIDE_STALL_SEC', 60),
-    heightLagBlocks: num('HEIGHT_LAG_BLOCKS', 20),
-    epochMinSampleMin: num('EPOCH_MIN_SAMPLE_MIN', 10),
+    heightLagBlocks: num('HEIGHT_LAG_BLOCKS', 50),
     localDownFails: Math.max(2, num('LOCAL_DOWN_FAILS', 3)),
     statusPollTimeoutSec: Math.max(3, num('STATUS_POLL_TIMEOUT_SEC', 10)),
     alertCooldownMin: num('ALERT_COOLDOWN_MIN', 30),
@@ -135,7 +130,6 @@ export function loadConfig(): Config {
     discordWebhookUrl: str('DISCORD_WEBHOOK_URL'),
     slackWebhookUrl: str('SLACK_WEBHOOK_URL'),
     pagerdutyRoutingKey: str('PAGERDUTY_ROUTING_KEY'),
-    pagerdutyThreshold: num('PAGERDUTY_THRESHOLD', 3),
   };
   return cached;
 }

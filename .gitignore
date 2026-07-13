@@ -5,6 +5,8 @@ build/
 .env
 .env.local
 .env.production
+state.json
+state.json.tmp
 npm-debug.log*
 .DS_Store
 *.tsbuildinfo
