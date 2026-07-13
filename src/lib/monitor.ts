@@ -86,6 +86,7 @@ interface LocalMachine {
 }
 
 const machines = new Map<NetworkName, NetworkMachine>();
+let bootPersisted: PersistedState = {};
 let localMachine: LocalMachine | null = null;
 const cooldowns = new Map<string, number>();
 const timers: NodeJS.Timeout[] = [];
@@ -439,8 +440,8 @@ async function evaluateLeaderDuty(
     vm.missingAlerted = false;
     await sendAlert({
       severity: 'recovered',
-      title: `${vv.label} back in the participation map`,
-      lines: [`Gone for ${vm.missingSince ? dur(vm.missingSince) : '?'}`, `Epoch ${epoch}`],
+      title: 'Back in participation map',
+      lines: [`📍 ${vv.label}`, `⏱ gone ${vm.missingSince ? dur(vm.missingSince) : '?'}`],
       network: net.name,
       link: explorerLink(net),
     });
@@ -448,8 +449,8 @@ async function evaluateLeaderDuty(
       vm.missingPdTriggered = false;
       await sendAlert({
         severity: 'recovered',
-        title: `${vv.label} back in the participation map`,
-        lines: ['Validator reappeared'],
+        title: 'Back in participation map',
+        lines: [`📍 ${vv.label}`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:missing`,
         pagerduty: 'resolve',
@@ -470,8 +471,8 @@ async function evaluateLeaderDuty(
       vm.trendPaged = false;
       await sendAlert({
         severity: 'recovered',
-        title: `${vv.label} epoch rolled over`,
-        lines: [`Epoch ${epoch} started, leader-slot counters reset`],
+        title: 'Epoch rollover',
+        lines: [`📍 ${vv.label}`, `🔄 epoch ${epoch} · counters reset`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
         pagerduty: 'resolve',
@@ -481,8 +482,8 @@ async function evaluateLeaderDuty(
       vm.trendAlerted = false;
       await sendAlert({
         severity: 'recovered',
-        title: `${vv.label} epoch rolled over`,
-        lines: [`Epoch ${epoch} started, leader-slot counters reset`],
+        title: 'Epoch rollover',
+        lines: [`📍 ${vv.label}`, `🔄 epoch ${epoch} · counters reset`],
         network: net.name,
       });
     }
@@ -508,11 +509,8 @@ async function evaluateLeaderDuty(
       vm.trendAlerted = true;
       await sendAlert({
         severity: 'warning',
-        title: `${vv.label} missed a leader slot`,
-        lines: [
-          `${vm.missStreak} missed leader slots in a row`,
-          `Epoch ${epoch} missed slots: ${pct(1 - proposal)}`,
-        ],
+        title: 'Missed leader slot',
+        lines: [`📍 ${vv.label}`, `📉 ${vm.missStreak} in a row · uptime ${pct(proposal)}`],
         network: net.name,
         link: explorerLink(net),
       });
@@ -521,8 +519,8 @@ async function evaluateLeaderDuty(
       vm.trendPaged = true;
       await sendAlert({
         severity: 'critical',
-        title: `${vv.label} keeps missing leader slots`,
-        lines: [`${vm.missStreak} in a row, missed slots ${pct(1 - proposal)}`],
+        title: 'Missing leader slots',
+        lines: [`📍 ${vv.label}`, `📉 ${vm.missStreak} in a row · uptime ${pct(proposal)}`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
         pagerduty: 'trigger',
@@ -539,19 +537,16 @@ async function evaluateLeaderDuty(
     if (wasAlerted) {
       await sendAlert({
         severity: 'recovered',
-        title: `${vv.label} proposed a block`,
-        lines: [
-          `Leader duty back after ${since ? dur(since) : '?'}`,
-          `Epoch ${epoch} missed slots: ${pct(1 - proposal)}`,
-        ],
+        title: 'Proposed a block',
+        lines: [`📍 ${vv.label}`, `📈 uptime ${pct(proposal)}${since ? ` · ⏱ after ${dur(since)}` : ''}`],
         network: net.name,
       });
     }
     if (wasPaged) {
       await sendAlert({
         severity: 'recovered',
-        title: `${vv.label} proposed a block`,
-        lines: [`Missed slots ${pct(1 - proposal)}`],
+        title: 'Proposed a block',
+        lines: [`📍 ${vv.label}`, `📈 uptime ${pct(proposal)}`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
         pagerduty: 'resolve',
@@ -573,11 +568,11 @@ async function onValidatorMissing(
   if (!vm.initialized || suppressed) return;
   if (vm.missingCount < 2 || vm.missingAlerted) return; // require 2 consecutive polls to avoid flapping
 
-  let classification = 'not in the validator registry, check the configured key';
+  let classification = 'not in registry — check the configured key';
   try {
     const info = await m.partClient.findInAllValidators(epoch, vv.key);
     if (info) {
-      classification = `registered but inactive (account ${info.account})`;
+      classification = 'registered but inactive';
       vv.account = info.account;
     }
   } catch {
@@ -589,8 +584,8 @@ async function onValidatorMissing(
   if (cooldownOk(`${net.name}:${vv.key}:missing`)) {
     await sendAlert({
       severity: 'critical',
-      title: `${vv.label} missing from the participation map`,
-      lines: [`Not in the epoch ${epoch} vote participation map`, `Status: ${classification}`],
+      title: 'Not in participation map',
+      lines: [`📍 ${vv.label}`, `🔎 ${classification}`],
       network: net.name,
       link: explorerLink(net),
     });
@@ -599,8 +594,8 @@ async function onValidatorMissing(
       vm.missingPdTriggered = true;
       await sendAlert({
         severity: 'critical',
-        title: `${vv.label} missing from the participation map`,
-        lines: [`Status: ${classification}`],
+        title: 'Not in participation map',
+        lines: [`📍 ${vv.label}`, `🔎 ${classification}`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:missing`,
         pagerduty: 'trigger',
@@ -618,6 +613,33 @@ async function refreshIdentity(net: NetworkConfig, m: NetworkMachine, epoch: num
     console.error(`[monitor] ${net.name} validators(${epoch}) failed: ${err instanceof Error ? err.message : err}`);
     return;
   }
+  // Entries given as an L1 address resolve to their BLS key here, once.
+  for (const vv of m.view.validators) {
+    if (!vv.key.startsWith('0x')) continue;
+    const info = byAccount[vv.key];
+    if (!info) continue;
+    const oldKey = vv.key;
+    vv.key = info.stake_table_key;
+    const vm = m.validators.get(oldKey);
+    if (vm) {
+      m.validators.delete(oldKey);
+      m.validators.set(vv.key, vm);
+      // Counters persisted under the resolved key from a previous run.
+      const p = bootPersisted[`${net.name}:${vv.key}`];
+      if (p && !vm.initialized) {
+        vm.lastEpoch = p.epoch;
+        vm.missStreak = p.missCount ?? 0;
+        vm.trendAlerted = !!p.warnSent;
+        vm.trendPaged = !!p.critSent;
+        vm.trendSince = p.since ?? null;
+        vm.heldProposal = typeof p.heldProposal === 'number' ? p.heldProposal : null;
+        vm.epochMissCount = p.epochMissCount ?? 0;
+        if (vv.samples.length === 0 && Array.isArray(p.samples)) vv.samples.push(...p.samples.slice(-50));
+      }
+    }
+    console.log(`[monitor] resolved ${oldKey} -> ${shortKey(vv.key)}`);
+  }
+
   const byKey = new Map(Object.values(byAccount).map((v) => [v.stake_table_key, v]));
   for (const vv of m.view.validators) {
     const info = byKey.get(vv.key);
@@ -673,15 +695,10 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
       m.stallAlerted = true;
       await sendAlert({
         severity: secondarySeesProgress ? 'warning' : 'critical',
-        title: secondarySeesProgress
-          ? `Query endpoint stale on ${net.name}`
-          : `No decide for ${Math.round(tsld)}s on ${net.name}`,
+        title: secondarySeesProgress ? 'Query endpoint stale' : 'Chain stalled',
         lines: secondarySeesProgress
-          ? [
-              `Active endpoint reports ${Math.round(tsld)}s since the last decide, another endpoint is advancing`,
-              `Switched endpoints. Likely a rate limit or endpoint issue, not the network`,
-            ]
-          : [`Threshold: ${cfg.decideStallSec}s`, `No configured endpoint sees progress, consensus may be stalled`],
+          ? [`⏱ no decide for ${Math.round(tsld)}s`, '🔁 switched to a healthy endpoint']
+          : [`⏱ no decide for ${Math.round(tsld)}s`, '🌐 no endpoint sees progress'],
         network: net.name,
         link: explorerLink(net),
       });
@@ -689,8 +706,8 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
         m.stallPdTriggered = true;
         await sendAlert({
           severity: 'critical',
-          title: `Chain stall on ${net.name}`,
-          lines: [`No decide for ${Math.round(tsld)}s`],
+          title: 'Chain stalled',
+          lines: [`⏱ no decide for ${Math.round(tsld)}s`],
           network: net.name,
           dedupKey: `espressoduty:${net.name}:stall`,
           pagerduty: 'trigger',
@@ -702,16 +719,16 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
       m.stallAlerted = false;
       await sendAlert({
         severity: 'recovered',
-        title: `Decides resumed on ${net.name}`,
-        lines: [`Last decide ${Math.round(tsld)}s ago${m.stallSince ? `, stalled for ${dur(m.stallSince)}` : ''}`],
+        title: 'Decides resumed',
+        lines: [`⏱ last decide ${Math.round(tsld)}s ago${m.stallSince ? ` · stalled ${dur(m.stallSince)}` : ''}`],
         network: net.name,
       });
       if (m.stallPdTriggered) {
         m.stallPdTriggered = false;
         await sendAlert({
           severity: 'recovered',
-          title: `Chain stall resolved on ${net.name}`,
-          lines: ['Decides resumed'],
+          title: 'Decides resumed',
+          lines: [`⏱ last decide ${Math.round(tsld)}s ago`],
           network: net.name,
           dedupKey: `espressoduty:${net.name}:stall`,
           pagerduty: 'resolve',
@@ -784,15 +801,15 @@ async function pollLocalNode(): Promise<void> {
       lm.downAlerted = false;
       await sendAlert({
         severity: 'recovered',
-        title: 'Local node back online',
-        lines: [`Reachable again${lm.downSince ? `, down for ${dur(lm.downSince)}` : ''}`],
+        title: 'Local node back',
+        lines: [lm.downSince ? `⏱ down ${dur(lm.downSince)}` : '🔌 reachable again'],
       });
       if (lm.downPdTriggered) {
         lm.downPdTriggered = false;
         await sendAlert({
           severity: 'recovered',
-          title: 'Local node back online',
-          lines: ['Reachable again'],
+          title: 'Local node back',
+          lines: ['🔌 reachable again'],
           dedupKey: 'espressoduty:local:down',
           pagerduty: 'resolve',
         });
@@ -821,8 +838,8 @@ async function pollLocalNode(): Promise<void> {
             lm.lagAlerted = true;
             await sendAlert({
               severity: 'warning',
-              title: 'Local node falling behind',
-              lines: [`${lag} blocks behind (local ${height}, network ${remoteHeight})`, `Threshold: ${cfg.heightLagBlocks} blocks`],
+              title: 'Local node behind',
+              lines: [`🐢 ${lag} blocks behind (local ${height} / network ${remoteHeight})`],
             });
           }
         } else if (lm.lagAlerted) {
@@ -830,7 +847,7 @@ async function pollLocalNode(): Promise<void> {
           await sendAlert({
             severity: 'recovered',
             title: 'Local node caught up',
-            lines: [`${Math.max(lag, 0)} blocks behind at height ${height}`],
+            lines: [`✅ height ${height}`],
           });
         }
       }
@@ -861,17 +878,17 @@ async function pollLocalNode(): Promise<void> {
             lm.stuckAlerted = false;
             await sendAlert({
               severity: 'recovered',
-              title: 'Node consensus moving again',
+              title: 'Node moving again',
               lines: [
-                `View ${metrics.lastDecidedView}${lm.stuckSince ? `, stuck for ${dur(lm.stuckSince)}` : ''}`,
+                `👁 view ${metrics.lastDecidedView}${lm.stuckSince ? ` · ⏱ stuck ${dur(lm.stuckSince)}` : ''}`,
               ],
             });
             if (lm.stuckPdTriggered) {
               lm.stuckPdTriggered = false;
               await sendAlert({
                 severity: 'recovered',
-                title: 'Node consensus moving again',
-                lines: [`View ${metrics.lastDecidedView}`],
+                title: 'Node moving again',
+                lines: [`👁 view ${metrics.lastDecidedView}`],
                 dedupKey: 'espressoduty:local:stuck',
                 pagerduty: 'resolve',
               });
@@ -890,10 +907,10 @@ async function pollLocalNode(): Promise<void> {
               lm.stuckAlerted = true;
               await sendAlert({
                 severity: 'critical',
-                title: 'Node consensus stuck',
+                title: 'Node stuck',
                 lines: [
-                  `last_decided_view frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`,
-                  'The network is progressing, your node is not',
+                  `👁 view frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`,
+                  '🌐 network is progressing, your node is not',
                 ],
               });
             }
@@ -901,8 +918,8 @@ async function pollLocalNode(): Promise<void> {
               lm.stuckPdTriggered = true;
               await sendAlert({
                 severity: 'critical',
-                title: 'Node consensus stuck',
-                lines: [`View frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`],
+                title: 'Node stuck',
+                lines: [`👁 view frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`],
                 dedupKey: 'espressoduty:local:stuck',
                 pagerduty: 'trigger',
               });
@@ -926,8 +943,8 @@ async function pollLocalNode(): Promise<void> {
         lm.downAlerted = true;
         await sendAlert({
           severity: 'critical',
-          title: 'Local node unreachable',
-          lines: [`${cfg.localNodeUrl} failed ${lm.failCount} consecutive checks`],
+          title: 'Local node down',
+          lines: [`🔌 ${cfg.localNodeUrl}`, `📉 ${lm.failCount} failed checks`],
         });
       }
       // Chat hears about it once, immediately; PagerDuty only if the node
@@ -940,8 +957,8 @@ async function pollLocalNode(): Promise<void> {
         lm.downPdTriggered = true;
         await sendAlert({
           severity: 'critical',
-          title: 'Local node unreachable',
-          lines: [`Down for ${dur(lm.downSince)}`],
+          title: 'Local node down',
+          lines: [`⏱ down ${dur(lm.downSince)}`],
           dedupKey: 'espressoduty:local:down',
           pagerduty: 'trigger',
         });
@@ -972,6 +989,7 @@ export function startMonitoring(): void {
   // back from STATE_FILE, so a restart cannot reset a drop streak.
   console.log(`[persist] state file: ${stateFilePath()}`);
   const persisted = loadPersisted();
+  bootPersisted = persisted;
   for (const net of cfg.networks) {
     const m = initNetwork(net);
     for (const vv of m.view.validators) {
@@ -1028,10 +1046,9 @@ export function startMonitoring(): void {
     severity: 'info',
     title: 'espressoduty started',
     lines: [
-      watched ? `Watching: ${watched}` : 'No validators configured yet',
-      `Poll: ${cfg.pollIntervalSec}s. Warn after ${cfg.consecutiveMissesWarn} missed leader slots in a row, page after ${cfg.consecutiveMissesCrit}`,
-      `Channels: ${store.channels.join(', ') || 'none'}`,
-      cfg.localNodeUrl ? 'Local node checks enabled' : 'Local node checks disabled',
+      watched ? `📡 ${watched}` : '📡 no validators configured',
+      `⚙️ poll ${cfg.pollIntervalSec}s · warn ${cfg.consecutiveMissesWarn} · page ${cfg.consecutiveMissesCrit}${cfg.localNodeUrl ? ' · local node' : ''}`,
+      `🔔 ${store.channels.join(', ') || 'none'}`,
     ],
   });
 }
@@ -1043,8 +1060,8 @@ export async function stopMonitoring(reason: string): Promise<void> {
   await Promise.race([
     sendAlert({
       severity: 'warning',
-      title: 'espressoduty shutting down',
-      lines: [`Received ${reason}, monitoring stops until restart`],
+      title: 'espressoduty stopped',
+      lines: [`🛑 received ${reason}`],
     }),
     new Promise((r) => setTimeout(r, 5000)),
   ]);
