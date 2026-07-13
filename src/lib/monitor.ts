@@ -41,6 +41,8 @@ interface ValidatorMachine {
    * flip the card back to a dash. Reset at epoch rollover.
    */
   heldProposal: number | null;
+  /** Miss events observed this epoch. */
+  epochMissCount: number;
 }
 
 interface NetworkMachine {
@@ -76,6 +78,11 @@ interface LocalMachine {
   initialized: boolean;
   /** Public query node used as the reference height for the lag check. */
   remoteBase: string | null;
+  lastDecidedView: number | null;
+  stuckCount: number;
+  stuckAlerted: boolean;
+  stuckSince: number | null;
+  stuckPdTriggered: boolean;
 }
 
 const machines = new Map<NetworkName, NetworkMachine>();
@@ -152,6 +159,9 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
         vote: null,
         proposal: null,
         missedSlots: null,
+        leaderSlots: null,
+        missedLeaderSlots: null,
+        epochMissCount: 0,
         health: 'unknown',
         samples: [],
       }),
@@ -176,6 +186,7 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
           missingSince: null,
           missingPdTriggered: false,
           heldProposal: null,
+          epochMissCount: 0,
         } satisfies ValidatorMachine,
       ]),
     ),
@@ -346,6 +357,7 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     } else {
       await evaluateLeaderDuty(net, vv, vm, prevRate, proposal, epoch, suppressed);
     }
+    vv.epochMissCount = vm.epochMissCount;
     vv.health = healthOf(vv, vm);
     vm.lastEpoch = epoch;
     vm.initialized = true;
@@ -369,6 +381,7 @@ function persistAll(): void {
         critSent: vm.trendPaged,
         since: vm.trendSince,
         heldProposal: vm.heldProposal,
+        epochMissCount: vm.epochMissCount,
         samples: vv.samples.slice(-50),
       };
     }
@@ -475,6 +488,7 @@ async function evaluateLeaderDuty(
     }
     vm.missStreak = 0;
     vm.trendSince = null;
+    vm.epochMissCount = 0;
     vm.lastEpoch = epoch;
     return; // the first reading of a fresh epoch is a baseline, not an event
   }
@@ -488,6 +502,7 @@ async function evaluateLeaderDuty(
 
   if (fell) {
     vm.missStreak += 1;
+    vm.epochMissCount += 1;
     if (vm.trendSince === null) vm.trendSince = Date.now();
     if (!vm.trendAlerted && vm.missStreak >= cfg.consecutiveMissesWarn && cooldownOk(`${net.name}:${vv.key}:trend`)) {
       vm.trendAlerted = true;
@@ -711,6 +726,42 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
 // Local node loop (LOCAL_NODE_URL)
 // ---------------------------------------------------------------------------
 
+interface NodeMetrics {
+  lastDecidedView: number | null;
+  leaderSlots: number | null;
+  timeoutsAsLeader: number | null;
+}
+
+/**
+ * The node's own Prometheus counters: exact leader-duty numbers and the
+ * view counter that proves consensus is advancing. Optional: everything
+ * degrades to the public data path when this endpoint is absent.
+ */
+async function fetchNodeMetrics(): Promise<NodeMetrics | null> {
+  if (!cfg.localNodeUrl) return null;
+  const url = `${cfg.localNodeUrl.replace(/\/$/, '')}/status/metrics`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), cfg.statusPollTimeoutSec * 1000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const grab = (name: string): number | null => {
+      const m = text.match(new RegExp(`^${name}(?:\\{[^}]*\\})? ([0-9.eE+]+)$`, 'm'));
+      return m ? Number(m[1]) : null;
+    };
+    return {
+      lastDecidedView: grab('consensus_last_decided_view'),
+      leaderSlots: grab('consensus_view_duration_as_leader_count'),
+      timeoutsAsLeader: grab('consensus_number_of_timeouts_as_leader'),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function pollLocalNode(): Promise<void> {
   if (!cfg.localNodeUrl || !localMachine) return;
   const store = getStore();
@@ -774,6 +825,83 @@ async function pollLocalNode(): Promise<void> {
         }
       }
     }
+    // --- Node metrics: exact leader-duty counts for the card, and the
+    // view counter as an instant liveness signal (no need to wait for a
+    // leader slot to find out the node died).
+    const metrics = await fetchNodeMetrics();
+    if (metrics) {
+      view.lastDecidedView = metrics.lastDecidedView;
+      const mainnetM = machines.get('mainnet');
+      const firstVv = mainnetM?.view.validators[0];
+      if (firstVv && metrics.leaderSlots !== null) {
+        firstVv.leaderSlots = metrics.leaderSlots;
+        firstVv.missedLeaderSlots = metrics.timeoutsAsLeader ?? 0;
+      }
+
+      if (metrics.lastDecidedView !== null) {
+        const advanced = lm.lastDecidedView === null || metrics.lastDecidedView > lm.lastDecidedView;
+        // Only count "stuck" while the network itself is progressing;
+        // a chain halt is the stall alert's job, not this one's.
+        const networkOk =
+          mainnetM?.view.timeSinceLastDecide !== null &&
+          mainnetM !== undefined &&
+          mainnetM.view.timeSinceLastDecide! <= cfg.decideStallSec;
+        if (advanced) {
+          if (lm.stuckAlerted) {
+            lm.stuckAlerted = false;
+            await sendAlert({
+              severity: 'recovered',
+              title: 'Node consensus moving again',
+              lines: [
+                `View ${metrics.lastDecidedView}${lm.stuckSince ? `, stuck for ${dur(lm.stuckSince)}` : ''}`,
+              ],
+            });
+            if (lm.stuckPdTriggered) {
+              lm.stuckPdTriggered = false;
+              await sendAlert({
+                severity: 'recovered',
+                title: 'Node consensus moving again',
+                lines: [`View ${metrics.lastDecidedView}`],
+                dedupKey: 'espressoduty:local:stuck',
+                pagerduty: 'resolve',
+              });
+            }
+          }
+          lm.stuckCount = 0;
+          lm.stuckSince = null;
+          view.stuck = false;
+        } else if (networkOk) {
+          lm.stuckCount += 1;
+          if (lm.stuckSince === null) lm.stuckSince = Date.now();
+          if (lm.stuckCount >= cfg.localDownFails) {
+            view.stuck = true;
+            if (lm.initialized && !lm.stuckAlerted && cooldownOk('local:stuck')) {
+              lm.stuckAlerted = true;
+              await sendAlert({
+                severity: 'critical',
+                title: 'Node consensus stuck',
+                lines: [
+                  `last_decided_view has not advanced for ${lm.stuckCount} checks (view ${metrics.lastDecidedView})`,
+                  'The network is progressing, your node is not',
+                ],
+              });
+              if (!lm.stuckPdTriggered) {
+                lm.stuckPdTriggered = true;
+                await sendAlert({
+                  severity: 'critical',
+                  title: 'Node consensus stuck',
+                  lines: [`View frozen at ${metrics.lastDecidedView}`],
+                  dedupKey: 'espressoduty:local:stuck',
+                  pagerduty: 'trigger',
+                });
+              }
+            }
+          }
+        }
+        lm.lastDecidedView = metrics.lastDecidedView;
+      }
+    }
+
     lm.initialized = true;
   } catch {
     lm.failCount += 1;
@@ -830,6 +958,7 @@ export function startMonitoring(): void {
       vm.trendSince = p.since ?? null;
       // Epoch-scoped: the first poll's rollover branch clears it if stale.
       vm.heldProposal = typeof p.heldProposal === 'number' ? p.heldProposal : null;
+      vm.epochMissCount = p.epochMissCount ?? 0;
       if (Array.isArray(p.samples)) vv.samples.push(...p.samples.slice(-50));
     }
     void pollParticipation(net);
@@ -847,8 +976,20 @@ export function startMonitoring(): void {
       lagAlerted: false,
       initialized: false,
       remoteBase: mainnet?.queryNodes[0] ?? null,
+      lastDecidedView: null,
+      stuckCount: 0,
+      stuckAlerted: false,
+      stuckSince: null,
+      stuckPdTriggered: false,
     };
-    store.localNode = { url: cfg.localNodeUrl, reachable: null, height: null, lagBlocks: null };
+    store.localNode = {
+      url: cfg.localNodeUrl,
+      reachable: null,
+      height: null,
+      lagBlocks: null,
+      lastDecidedView: null,
+      stuck: false,
+    };
     void pollLocalNode();
     timers.push(setInterval(() => void pollLocalNode(), Math.max(cfg.statusPollIntervalSec, 15) * 1000));
   }

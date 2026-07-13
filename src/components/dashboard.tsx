@@ -101,14 +101,11 @@ function Header({ live }: { live: boolean }) {
 
   return (
     <header className="mb-8 flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <Starburst />
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight" style={{ color: 'var(--text-strong)' }}>
-            espressoduty
-          </h1>
-          <p className="label">every view counts</p>
-        </div>
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight" style={{ color: 'var(--text-strong)' }}>
+          espressoduty
+        </h1>
+        <p className="label">espresso validator monitoring</p>
       </div>
       <div className="flex items-center gap-2">
         <span
@@ -134,29 +131,6 @@ function Header({ live }: { live: boolean }) {
         )}
       </div>
     </header>
-  );
-}
-
-/** Espresso-style starburst mark. */
-function Starburst() {
-  return (
-    <svg width="32" height="32" viewBox="0 0 34 34" aria-hidden>
-      {Array.from({ length: 12 }, (_, i) => {
-        const a = (i * Math.PI) / 6;
-        return (
-          <line
-            key={i}
-            x1={17 + 5 * Math.cos(a)}
-            y1={17 + 5 * Math.sin(a)}
-            x2={17 + 14 * Math.cos(a)}
-            y2={17 + 14 * Math.sin(a)}
-            stroke="var(--accent)"
-            strokeWidth={i % 3 === 0 ? 3 : 2}
-            strokeLinecap="round"
-          />
-        );
-      })}
-    </svg>
   );
 }
 
@@ -222,7 +196,9 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
           v={
             localNode.reachable === false
               ? 'down'
-              : localNode.lagBlocks === null
+              : localNode.stuck
+                ? 'stuck'
+                : localNode.lagBlocks === null
                 ? localNode.reachable
                   ? 'ok'
                   : '—'
@@ -231,7 +207,7 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
                   : `${localNode.lagBlocks} behind`
           }
           color={
-            localNode.reachable === false
+            localNode.reachable === false || localNode.stuck
               ? 'var(--crit)'
               : localNode.lagBlocks !== null && localNode.lagBlocks > 20
                 ? 'var(--warn)'
@@ -322,6 +298,23 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
       <PollGrid samples={v.samples} />
 
       <p className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs" style={{ color: 'var(--muted)' }}>
+        <span
+          title={
+            v.leaderSlots !== null
+              ? 'Exact counts from your node since it started'
+              : 'Missed-slot events observed this epoch'
+          }
+          style={{
+            color:
+              (v.leaderSlots !== null ? (v.missedLeaderSlots ?? 0) : v.epochMissCount) > 0
+                ? 'var(--crit)'
+                : 'var(--muted)',
+          }}
+        >
+          {v.leaderSlots !== null
+            ? `missed ${v.missedLeaderSlots ?? 0}/${v.leaderSlots} slots`
+            : `${v.epochMissCount} missed this epoch`}
+        </span>
         <span title="Informational: measures the QC quorum race (latency), not node health">
           {v.vote === null ? '— vote' : `${fmtPct(v.vote, 1)} vote`}
         </span>
