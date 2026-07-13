@@ -86,10 +86,6 @@ The dashboard is read-only but unauthenticated — keep it on localhost or a
 VPN, or put an authenticated reverse proxy in front before exposing it
 (the docker-compose file binds to loopback for this reason).
 
-A validator can be given as its L1 address instead of the BLS key —
-`MAINNET_VALIDATORS=Huginn=0xyouraddress` — and espressoduty resolves it
-to the BLS key from the registry on the first poll.
-
 ## Configuration
 
 Everything lives in `.env` ([.env.example](.env.example) is the full list):
