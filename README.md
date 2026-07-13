@@ -25,10 +25,10 @@ espressoduty.
 The cumulative proposal rate only moves when your validator is leader, so
 its per-poll change is a real event:
 
-- rate fell = **missed leader slot**. `CONSECUTIVE_MISSES_WARN` (1) →
-  Telegram / Slack / Discord on the first miss; `CONSECUTIVE_MISSES_CRIT`
-  (3) in a row → PagerDuty. A streak means the node is failing its
-  critical duty; a successful proposal clears it.
+- rate fell = **missed leader slot**. `CONSECUTIVE_MISSES_WARN` (3) in a
+  row → Telegram / Slack / Discord; `CONSECUTIVE_MISSES_CRIT` (5) in a
+  row → PagerDuty. A streak means the node is failing its critical duty;
+  a successful proposal clears it.
 - rate rose = **successful proposal** → streak resets, recovery sent,
   PagerDuty incident resolved.
 - rate flat = no leader slot in that window (slots are sparse, that is
@@ -108,7 +108,7 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 Each validator card shows uptime (proposal participation, the positive
 pole of missed slots) and, beside it, the raw missed-slot count: exact
 numbers from your node's metrics when a local node is configured
-(`0 / 11`, since node start) or the miss events observed this epoch
+(`0 / 35`, since node start) or the miss events observed this epoch
 otherwise. Vote participation sits as a small neutral figure in the stats
 row. Below, a 50-slot leader-duty grid: one cell per poll, red when
 the rate fell in that window (missed leader slot), green when it rose or
@@ -133,7 +133,10 @@ API reference:
   properly; missed slots = 1 - value
 - `node/stake-table/current`: epoch number, set membership, stake
 - `node/validators/:epoch`: account, commission, delegators
-- `status/block-height`, `status/time-since-last-decide`: liveness
+- `status/block-height`, `status/time-since-last-decide`: chain height and
+  network liveness (the chain-stall check)
+- `status/metrics` (local node only): Prometheus counters — exact
+  leader-slot counts and `last_decided_view`, the instant stuck check
 
 Each poll is served by a single source (local node when in sync, public
 otherwise) so subjective per-node views are never mixed.
