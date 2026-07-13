@@ -391,8 +391,10 @@ function Metric({
  * an epoch has no trend and renders neutral; an empty bordered cell means
  * that poll returned no data. Thin vertical lines mark epoch boundaries.
  */
+const GRID_SLOTS = 50;
+
 function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
-  const recent = samples.slice(-90);
+  const recent = samples.slice(-GRID_SLOTS);
   if (recent.length === 0) {
     return <p className="label">collecting polls…</p>;
   }
@@ -402,9 +404,10 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
         <span className="label">vote participation · per poll</span>
         <span className="label">{recent.length} polls</span>
       </div>
-      {/* Fixed-width cells, left-aligned: three polls after a restart should
-          look like three small ticks, not three giant bars. */}
-      <div className="flex flex-wrap items-stretch gap-px">
+      {/* Exactly GRID_SLOTS equal columns across the full card width: bars
+          keep the same comfortable size whether 3 polls or 50 are in the
+          buffer, and fill in left to right. */}
+      <div className="grid gap-px" style={{ gridTemplateColumns: `repeat(${GRID_SLOTS}, 1fr)` }}>
         {recent.map((s, i) => {
           const prev = recent[i - 1];
           const boundary = prev !== undefined && prev.epoch !== null && s.epoch !== null && prev.epoch !== s.epoch;
@@ -434,10 +437,10 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
               ? `${time} · no data`
               : `${time} · epoch ${s.epoch} · vote ${fmtPct(s.vote)}${trend}`;
           return (
-            <div key={s.t} className="flex h-4 items-stretch" title={tip}>
-              {boundary && <span className="mr-px w-px shrink-0" style={{ background: 'var(--border-strong)' }} />}
+            <div key={s.t} className="flex h-5 items-stretch" title={tip}>
+              {boundary && <span className="mr-px w-0.5 shrink-0" style={{ background: 'var(--border-strong)' }} />}
               <span
-                className="w-1.5 rounded-[2px]"
+                className="w-full rounded-[3px]"
                 style={color === null ? { border: '1px solid var(--border)', background: 'transparent' } : { background: color }}
               />
             </div>

@@ -5,16 +5,10 @@
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 
 Uptime monitoring and alerting for [Espresso Network](https://espressosys.com/)
-validators. Watches missed slots and vote participation, catches chain stalls
-and set drops, keeps an eye on your node, and alerts over Telegram, Discord,
+validators. Polls vote participation every minute, alerts when it keeps
+dropping, watches your node's liveness, and pages you over Telegram, Discord,
 Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
 events.
-
-Works with no node at all against the public query service. Point
-`LOCAL_NODE_URL` at your own node to add reachability and sync-lag checks.
-Each poll reads all participation metrics from a single source: your node
-when it is reachable and in sync, the public endpoints otherwise — never a
-mix, and never an out-of-sync node.
 
 ![dashboard, light theme](docs/dashboard-light.png)
 
@@ -25,64 +19,44 @@ mix, and never an out-of-sync node.
 
 </details>
 
-## Alerts
+## The alert rule
 
-The headline metric is **missed slots**, the number Espresso's own staking
-dashboard leads with: `1 - proposal_participation`, the fraction of leader
-slots where the validator failed to propose.
+Espresso publishes participation as a per-epoch average, so a healthy node's
+number climbs every poll and a node that misses views drags it down. The rule
+is exactly that:
 
-| Alert | Severity | Recovery |
-|---|---|---|
-| Missed slots above `MISSED_CRITICAL` / `MISSED_WARN` | critical (pages) / warning | yes |
-| Vote participation below `VOTE_CRITICAL` / `VOTE_WARN` | critical / warning, chat only | yes |
-| Missing from the participation map | critical, pages | yes |
-| No decide for `DECIDE_STALL_SEC` | critical, or warning if only the endpoint is stale | yes |
-| Local node unreachable / lagging | critical / warning | yes |
-| Start / shutdown | info | — |
+- vote dropped **3 polls in a row** (`CONSECUTIVE_DROPS_WARN`) → Telegram /
+  Slack / Discord
+- vote dropped **5 polls in a row** (`CONSECUTIVE_DROPS_CRIT`) → PagerDuty
+- first rising poll → recovery message, PagerDuty incident resolved
 
-Rules that keep it quiet:
+Counters persist to `STATE_FILE`, so a bot restart continues the streak
+instead of forgetting it. An epoch rollover resets counters cleanly (rates
+restart near zero by design — that is not an alert) and resolves anything
+left open.
 
-- Nothing fires on the first poll after a restart, repeats respect a cooldown,
-  and every alert has a matching recovery with the worst value and duration.
-- Missed slots always shows a number: with no proposal data for the epoch
-  (no leader slots observed) nothing is known to be missed, so it reads 0%.
-  Alerts and recoveries fire on real proposal data only. Proposal tracking
-  is live-only per node and the public endpoint balances over backends with
-  differing state, so when the pinned source has no proposal data the other
-  sources are probed for it; a value seen once is held for the epoch.
-- Participation rates reset at each epoch, so threshold alerts are suppressed
-  for the first `EPOCH_MIN_SAMPLE_MIN` minutes after a rollover.
-- While the local node is down or lagging, participation alerts stay quiet:
-  the local-node alert is the root cause. Missed-slots alerts stay quiet for
-  the rest of that epoch — the cumulative average keeps reporting slots lost
-  during the outage, which nobody can act on anymore.
-- The local node counts as down only after `LOCAL_DOWN_FAILS` consecutive
-  failed checks; one slow response from a busy node is not an outage.
-- A chain-stall alert is cross-checked against the other endpoints first, so a
-  stale endpoint doesn't masquerade as a network halt.
-- PagerDuty pages only on missed slots (after `PAGERDUTY_THRESHOLD`
-  consecutive criticals) and on dropping out of the set.
+Also watched:
+
+| Alert | Severity |
+|---|---|
+| Validator missing from the participation map (dropped from set / wrong key) | critical, pages |
+| No decide for 60s, cross-checked against other endpoints first | critical (warning if only the endpoint is stale) |
+| Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails) / lagging (`HEIGHT_LAG_BLOCKS`) | critical / warning |
+| Start / shutdown | info |
+
+While the local node is down or lagging, the drop counter freezes: the
+local-node alert is the root cause, participation dips are its symptom.
+Every alert has a paired recovery and repeats respect a cooldown.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/s0urledd/espressoduty.git
 cd espressoduty
-cp .env.example .env   # add your BLS key(s) and alert channels
+cp .env.example .env   # add your BLS key and channels
 npm install
 npm run build
-```
-
-PM2 (recommended):
-
-```bash
-pm2 start ecosystem.config.js
-```
-
-Docker:
-
-```bash
-docker compose up -d --build
+pm2 start ecosystem.config.js   # or: docker compose up -d --build
 ```
 
 Dashboard: `http://localhost:3030`. Test alert:
@@ -90,47 +64,46 @@ Dashboard: `http://localhost:3030`. Test alert:
 
 ## Configuration
 
-All settings live in `.env`, fully commented in
-[.env.example](.env.example). The essentials:
+Everything lives in `.env` ([.env.example](.env.example) is the full list):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MAINNET_VALIDATORS` | — | BLS keys, comma separated. `Label=BLS_VER_KEY~...` adds a name |
-| `LOCAL_NODE_URL` | — | Your node's query service: primary read source + local checks |
-| `MISSED_WARN` / `MISSED_CRITICAL` | `0.50` / `0.90` | Missed-slots thresholds |
-| `VOTE_WARN` / `VOTE_CRITICAL` | `0.90` / `0.50` | Vote thresholds, chat only |
-| `POLL_INTERVAL_SEC` | `60` | Participation poll |
-| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | — | Telegram |
-| `DISCORD_WEBHOOK_URL` / `SLACK_WEBHOOK_URL` | — | Webhooks |
-| `PAGERDUTY_ROUTING_KEY` + `PAGERDUTY_THRESHOLD` | — / `3` | Paging |
+| `MAINNET_VALIDATORS` | — | `Label=BLS_VER_KEY~...`, comma separated |
+| `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
+| `LOCAL_NODE_URL` | — | Your node's query service, enables local checks |
+| `CONSECUTIVE_DROPS_WARN` / `CONSECUTIVE_DROPS_CRIT` | `3` / `5` | The alert rule |
+| `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `3` / `50` | Local node monitoring |
+| `POLL_INTERVAL_SEC` | `60` | Poll cadence |
+| `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, `PAGERDUTY_ROUTING_KEY` | — | Channels |
+
+## Dashboard
+
+Each validator card shows vote and missed slots as big numbers with status
+dots, and a 50-slot poll grid: one cell per poll, green when the average
+climbed in that window (the node voted), red when it fell (missed views),
+empty when the poll returned no data. Thin lines mark epoch boundaries. The
+grid and counters survive restarts via `STATE_FILE`.
+
+Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
+as on stake.espresso.network). Proposal tracking is live-only per node and
+the public endpoint balances over backends with differing state, so sources
+are probed until one has the data, and a value seen once is held for the
+epoch. With no proposal data there is nothing known to be missed: 0%.
 
 ## Data sources
 
-Everything comes from the Espresso query service (`/v1`). Semantics verified
-against the node's own API reference:
+Espresso query service (`/v1`), semantics verified against the node's own
+API reference:
 
-- `node/participation/proposal/current`: fraction of views where the key
-  proposed properly as leader. Missed slots = 1 - value.
-- `node/participation/vote/current`: fraction of views properly voted.
-- `node/stake-table/current`: current epoch number, set membership, stake.
-- `node/validators/:epoch`, `node/all-validators/...`: account, commission
-  (basis points), delegators. Used to tell "dropped from the set" from
-  "wrong key".
-- `status/block-height`, `status/time-since-last-decide`: liveness.
+- `node/participation/vote/current`: fraction of views properly voted
+- `node/participation/proposal/current`: fraction of leader slots proposed
+  properly; missed slots = 1 - value
+- `node/stake-table/current`: epoch number, set membership, stake
+- `node/validators/:epoch`: account, commission, delegators
+- `status/block-height`, `status/time-since-last-decide`: liveness
 
-Participation numbers are subjective per serving node, which is why every
-poll is served by one source and an out-of-sync local node is never used.
-Values can still differ from stake.espresso.network, whose missed-slots
-column comes from a separate streaming aggregator with its own observation
-window; the definition is the same, the window is not.
-
-State lives in memory: a restart starts clean, which is also why the first
-poll never alerts.
-
-## Roadmap
-
-Per-endpoint health alerting, participation trend detection for public-only
-setups, epoch history. The groundwork (endpoint failover, epoch tracking) is
-in place.
+Each poll is served by a single source (local node when in sync, public
+otherwise) so subjective per-node views are never mixed.
 
 MIT licensed.
