@@ -10,14 +10,8 @@ consecutive missed leader slots, checks your node's liveness, and pages you
 over Telegram, Discord, Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
 events.
 
-![dashboard, light theme](docs/dashboard-light.png)
+<img width="966" height="571" alt="image" src="https://github.com/user-attachments/assets/8e881af5-d731-403d-9588-96fc045dbea6" />
 
-<details>
-<summary>dark theme</summary>
-
-![dashboard, dark theme](docs/dashboard-dark.png)
-
-</details>
 
 ## The alert rule: leader duty
 
