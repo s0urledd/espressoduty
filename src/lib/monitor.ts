@@ -336,10 +336,11 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     if (stakeHex) vv.stakeEsp = hexStakeToEsp(stakeHex);
     vv.vote = vote;
     vv.proposal = proposal;
-    // Espresso's headline metric, always numeric: with no proposal data for
-    // the key this epoch there are no known missed slots, which is 0%.
-    // Alerting still keys off real proposal data only (vv.proposal).
-    vv.missedSlots = proposal === null ? 0 : 1 - proposal;
+    // Espresso's headline metric. 0% only when the data really says 0:
+    // with no proposal data for the epoch yet the value is unknown and
+    // renders as a dash until a source reports it (the probe plus the
+    // per-epoch hold make that window short).
+    vv.missedSlots = proposal === null ? null : 1 - proposal;
     pushSample(vv, { t: Date.now(), epoch, vote });
 
     if (vote === null) {
@@ -369,6 +370,7 @@ function persistAll(): void {
         warnSent: vm.trendAlerted,
         critSent: vm.trendPaged,
         since: vm.trendSince,
+        heldProposal: vm.heldProposal,
         samples: vv.samples.slice(-50),
       };
     }
@@ -822,6 +824,8 @@ export function startMonitoring(): void {
       vm.trendAlerted = !!p.warnSent;
       vm.trendPaged = !!p.critSent;
       vm.trendSince = p.since ?? null;
+      // Epoch-scoped: the first poll's rollover branch clears it if stale.
+      vm.heldProposal = typeof p.heldProposal === 'number' ? p.heldProposal : null;
       if (Array.isArray(p.samples)) vv.samples.push(...p.samples.slice(-50));
     }
     void pollParticipation(net);

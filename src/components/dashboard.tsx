@@ -21,7 +21,7 @@ const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
 const MISSED_CRIT = Number(process.env.NEXT_PUBLIC_MISSED_CRITICAL ?? 0.9);
 
 const NO_SLOTS_HINT =
-  'No proposal data for this epoch yet (no leader slots observed), so nothing is known to be missed';
+  'No proposal data reported for this epoch yet; a value appears as soon as a source has it';
 
 function rateColor(rate: number | null): string {
   if (rate === null) return 'var(--idle)';
@@ -366,8 +366,8 @@ function Metric({
         <span className="label">{label}</span>
       </p>
       {empty ? (
-        <p className="text-[26px] font-medium leading-none" style={{ color: 'var(--idle)' }}>
-          —
+        <p className="pt-2 text-sm leading-none" style={{ color: 'var(--idle)' }}>
+          no data
         </p>
       ) : (
         <p className="text-[26px] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
