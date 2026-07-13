@@ -79,8 +79,8 @@ npm run build
 pm2 start ecosystem.config.js   # or: docker compose up -d --build
 ```
 
-Dashboard: `http://localhost:3030`. Test alert:
-`curl -X POST http://localhost:3030/api/alert`
+Dashboard: `http://localhost:3030`. The startup alert doubles as a channel
+test: every configured channel gets a message each time espressoduty starts.
 
 A validator can be given as its L1 address instead of the BLS key —
 `MAINNET_VALIDATORS=Huginn=0xyouraddress` — and espressoduty resolves it
@@ -122,6 +122,13 @@ the public endpoint balances over backends with differing state, so sources
 are probed until one has the data. A value seen once is held for the epoch
 and survives restarts; 0% only ever means the data really says 0%, and
 "no data" means no source has reported proposal data for the epoch yet.
+
+## Prometheus (optional)
+
+`GET /metrics` serves everything on the dashboard in Prometheus format —
+participation, miss counts, set membership, network and local-node status.
+Point your existing Prometheus/Grafana at it, or ignore it entirely: no
+config, nothing else depends on it.
 
 ## Data sources
 
