@@ -37,8 +37,9 @@ export interface ValidatorView {
   proposal: number | null;
   /**
    * The delegator-facing headline: 1 - proposal_participation, same formula
-   * as stake.espresso.network. null = no leader slots this epoch yet, which
-   * Espresso renders as a dash and so do we. Never a failure.
+   * as stake.espresso.network. Always numeric after the first poll: with no
+   * proposal data for the epoch (proposal === null) nothing is known to be
+   * missed, so it reads 0. Alerting keys off real proposal data only.
    */
   missedSlots: number | null;
   health: ValidatorHealth;

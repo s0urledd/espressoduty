@@ -44,10 +44,12 @@ Rules that keep it quiet:
 
 - Nothing fires on the first poll after a restart, repeats respect a cooldown,
   and every alert has a matching recovery with the worst value and duration.
-- A key absent from the proposal map shows a dash, like stake.espresso.network.
-  Not being leader this epoch is not a failure and never alerts. Once a real
-  value has been seen, it is held for the rest of the epoch so one incomplete
-  poll cannot flip the card back to a dash.
+- Missed slots always shows a number: with no proposal data for the epoch
+  (no leader slots observed) nothing is known to be missed, so it reads 0%.
+  Alerts and recoveries fire on real proposal data only. Proposal tracking
+  is live-only per node and the public endpoint balances over backends with
+  differing state, so when the pinned source has no proposal data the other
+  sources are probed for it; a value seen once is held for the epoch.
 - Participation rates reset at each epoch, so threshold alerts are suppressed
   for the first `EPOCH_MIN_SAMPLE_MIN` minutes after a rollover.
 - While the local node is down or lagging, participation alerts stay quiet:
