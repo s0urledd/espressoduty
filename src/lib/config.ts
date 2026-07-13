@@ -33,6 +33,10 @@ export interface Config {
    */
   consecutiveMissesWarn: number;
   consecutiveMissesCrit: number;
+  /** Minutes the local node may stay down/stuck before PagerDuty is paged. */
+  localDownPageMin: number;
+  /** Minutes without view progress before the stuck alert fires. */
+  stuckAfterMin: number;
   /** Display thresholds for the missed-slots color only, never alerts. */
   missedWarn: number;
   missedCritical: number;
@@ -108,8 +112,10 @@ export function loadConfig(): Config {
   cached = {
     networks,
     localNodeUrl: str('LOCAL_NODE_URL') || null,
-    consecutiveMissesWarn: Math.max(1, num('CONSECUTIVE_MISSES_WARN', 2)),
+    consecutiveMissesWarn: Math.max(1, num('CONSECUTIVE_MISSES_WARN', 1)),
     consecutiveMissesCrit: Math.max(2, num('CONSECUTIVE_MISSES_CRIT', 3)),
+    localDownPageMin: Math.max(1, num('LOCAL_DOWN_PAGE_MIN', 10)),
+    stuckAfterMin: Math.max(1, num('STUCK_AFTER_MIN', 5)),
     missedWarn: num('MISSED_WARN', 0.5),
     missedCritical: num('MISSED_CRITICAL', 0.9),
     decideStallSec: num('DECIDE_STALL_SEC', 60),

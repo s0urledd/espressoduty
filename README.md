@@ -31,10 +31,10 @@ espressoduty.
 The cumulative proposal rate only moves when your validator is leader, so
 its per-poll change is a real event:
 
-- rate fell = **missed leader slot**. `CONSECUTIVE_MISSES_WARN` (2) in a
-  row → Telegram / Slack / Discord; `CONSECUTIVE_MISSES_CRIT` (3) →
-  PagerDuty. One isolated miss can be bad luck; a streak means the node is
-  failing its critical duty.
+- rate fell = **missed leader slot**. `CONSECUTIVE_MISSES_WARN` (1) →
+  Telegram / Slack / Discord on the first miss; `CONSECUTIVE_MISSES_CRIT`
+  (3) in a row → PagerDuty. A streak means the node is failing its
+  critical duty; a successful proposal clears it.
 - rate rose = **successful proposal** → streak resets, recovery sent,
   PagerDuty incident resolved.
 - rate flat = no leader slot in that window (slots are sparse, that is
@@ -50,8 +50,9 @@ Also watched:
 |---|---|
 | Validator missing from the participation map (dropped from set / wrong key) | critical, pages |
 | No decide for 60s, cross-checked against other endpoints first | critical (warning if only the endpoint is stale) |
-| Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails) / lagging (`HEIGHT_LAG_BLOCKS`) | critical / warning |
-| Node consensus stuck: reachable but `last_decided_view` frozen while the network progresses (needs a local node with metrics) | critical, pages |
+| Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails): chat immediately, PagerDuty if still down after `LOCAL_DOWN_PAGE_MIN` (10m) | critical |
+| Local node lagging (`HEIGHT_LAG_BLOCKS`) | warning |
+| Node consensus stuck: reachable but `last_decided_view` frozen for `STUCK_AFTER_MIN` (5m) while the network progresses; PagerDuty after `LOCAL_DOWN_PAGE_MIN` (needs a local node with metrics) | critical |
 | Start / shutdown | info |
 
 While the local node is down or lagging, the miss counter freezes: the
@@ -72,6 +73,15 @@ pm2 start ecosystem.config.js   # or: docker compose up -d --build
 Dashboard: `http://localhost:3030`. Test alert:
 `curl -X POST http://localhost:3030/api/alert`
 
+Don't know your BLS key? Look it up from your validator's L1 account
+(the address must be lowercase):
+
+```bash
+Q=https://query.main.net.espresso.network/v1
+EPOCH=$(curl -s $Q/node/stake-table/current | jq .epoch)
+curl -s $Q/node/validators/$EPOCH | jq -r '."0xyouraddress".stake_table_key'
+```
+
 ## Configuration
 
 Everything lives in `.env` ([.env.example](.env.example) is the full list):
@@ -81,24 +91,28 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | `MAINNET_VALIDATORS` | — | `Label=BLS_VER_KEY~...`, comma separated |
 | `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
 | `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
-| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `2` / `3` | Missed leader slots in a row |
+| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `1` / `3` | Missed leader slots: chat / PagerDuty |
 | `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `3` / `50` | Local node monitoring |
+| `LOCAL_DOWN_PAGE_MIN` / `STUCK_AFTER_MIN` | `10` / `5` | Minutes before down pages / stuck alerts |
 | `POLL_INTERVAL_SEC` | `60` | Poll cadence |
 | `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, `PAGERDUTY_ROUTING_KEY` | — | Channels |
 
 ## Dashboard
 
-Each validator card leads with uptime (proposal participation, the positive
-pole of missed slots). The stats row shows exact counts from your node's
-metrics when a local node is configured (`missed 0/11 slots`, since node
-start) or the miss events observed this epoch otherwise, plus vote
-participation as a small neutral figure. Below it, a 50-slot leader-duty
-grid: one cell per poll, red when
+Each validator card shows uptime (proposal participation, the positive
+pole of missed slots) and, beside it, the raw missed-slot count: exact
+numbers from your node's metrics when a local node is configured
+(`0 / 11`, since node start) or the miss events observed this epoch
+otherwise. Vote participation sits as a small neutral figure in the stats
+row. Below, a 50-slot leader-duty grid: one cell per poll, red when
 the rate fell in that window (missed leader slot), green when it rose or
 held steady (duty intact), faint until the epoch has proposal data, empty
 when the poll returned no data. Thin lines mark epoch boundaries. The grid
-and counters survive restarts via `STATE_FILE`.
+and counters survive restarts via `STATE_FILE`. In the status line,
+`decide` is the seconds since the network finalized a block (a HotShot
+"decide"): 1-2s is normal, sustained growth means the network or the
+serving endpoint has a problem.
 
 Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
 as on stake.espresso.network). Proposal tracking is live-only per node and

@@ -284,37 +284,21 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
       </div>
 
       {/* Leader duty is the health metric; everything else is context.
-          Shown as uptime (= proposal participation), the positive pole of
-          missed slots. */}
-      <div className="mb-4">
+          Uptime (= proposal participation) and the raw missed-slot count
+          side by side. */}
+      <div className="mb-4 grid grid-cols-2 gap-4">
         <Metric
           label="uptime"
           value={v.proposal}
           dot={missedColor(v.proposal === null ? null : 1 - v.proposal)}
           hint={v.proposal === null ? NO_SLOTS_HINT : undefined}
         />
+        <MissedCount v={v} />
       </div>
 
       <PollGrid samples={v.samples} />
 
       <p className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs" style={{ color: 'var(--muted)' }}>
-        <span
-          title={
-            v.leaderSlots !== null
-              ? 'Exact counts from your node since it started'
-              : 'Missed-slot events observed this epoch'
-          }
-          style={{
-            color:
-              (v.leaderSlots !== null ? (v.missedLeaderSlots ?? 0) : v.epochMissCount) > 0
-                ? 'var(--crit)'
-                : 'var(--muted)',
-          }}
-        >
-          {v.leaderSlots !== null
-            ? `missed ${v.missedLeaderSlots ?? 0}/${v.leaderSlots} slots`
-            : `${v.epochMissCount} missed this epoch`}
-        </span>
         <span title="Informational: measures the QC quorum race (latency), not node health">
           {v.vote === null ? '— vote' : `${fmtPct(v.vote, 1)} vote`}
         </span>
@@ -324,6 +308,41 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
         {v.account && (
           <span className="tabular-nums" title={v.account}>
             {v.account.slice(0, 6)}…{v.account.slice(-4)}
+          </span>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Raw missed-slot count: exact numbers from the node's own metrics when a
+ * local node is configured (since node start), otherwise the miss events
+ * observed this epoch.
+ */
+function MissedCount({ v }: { v: ValidatorView }) {
+  const local = v.leaderSlots !== null;
+  const count = local ? (v.missedLeaderSlots ?? 0) : v.epochMissCount;
+  return (
+    <div
+      title={
+        local
+          ? `${count} of ${v.leaderSlots} leader slots missed since the node started`
+          : 'Missed-slot events observed this epoch'
+      }
+    >
+      <p className="mb-1 flex items-center gap-1.5">
+        <span
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ background: count > 0 ? 'var(--crit)' : 'var(--ok)' }}
+        />
+        <span className="label">missed slots</span>
+      </p>
+      <p className="text-[26px] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
+        {count}
+        {local && (
+          <span className="text-sm" style={{ color: 'var(--muted)' }}>
+            {' '}/ {v.leaderSlots}
           </span>
         )}
       </p>
