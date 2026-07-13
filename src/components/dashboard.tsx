@@ -307,12 +307,14 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
         </button>
       </div>
 
-      {/* Leader duty is the health metric; everything else is context. */}
+      {/* Leader duty is the health metric; everything else is context.
+          Shown as uptime (= proposal participation), the positive pole of
+          missed slots. */}
       <div className="mb-4">
         <Metric
-          label="missed slots"
-          value={v.missedSlots}
-          dot={missedColor(v.missedSlots)}
+          label="uptime"
+          value={v.proposal}
+          dot={missedColor(v.proposal === null ? null : 1 - v.proposal)}
           hint={v.proposal === null ? NO_SLOTS_HINT : undefined}
         />
       </div>
@@ -374,11 +376,10 @@ function Metric({
 
 /**
  * Leader-duty grid: one cell per poll. The cumulative proposal rate only
- * moves when this validator IS the leader, so the per-poll change is a
- * real event: green = proposed successfully in that window, red = missed
- * leader slot(s), faint = no leader slot observed (slots are sparse by
- * nature), empty bordered = the poll returned no data. Thin vertical
- * lines mark epoch boundaries.
+ * moves when this validator IS the leader, so a falling poll is a real
+ * missed-slot event (red); rising or steady means duty intact (green).
+ * Faint = no proposal data yet this epoch, empty bordered = the poll
+ * returned no data. Thin vertical lines mark epoch boundaries.
  */
 const GRID_SLOTS = 50;
 
@@ -401,27 +402,28 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
           const noData = s.vote === null && s.proposal === null;
           const prevP =
             prev !== undefined && prev.epoch === s.epoch && prev.proposal !== null ? prev.proposal : null;
-          let kind: 'proposed' | 'missed' | 'idle' | 'nodata';
+          // The operator's rule: falling = missed a leader slot (red);
+          // rising or steady = duty intact (green).
+          let kind: 'ok' | 'missed' | 'idle' | 'nodata';
           if (noData) {
             kind = 'nodata';
           } else if (s.proposal === null) {
             kind = 'idle';
-          } else if (prevP === null) {
-            // first reading this epoch: 0 means every slot so far was missed
-            kind = s.proposal === 0 ? 'missed' : s.proposal === 1 ? 'proposed' : 'idle';
-          } else if (s.proposal > prevP + 1e-9) {
-            kind = 'proposed';
-          } else if (s.proposal < prevP - 1e-9) {
+          } else if (prevP !== null && s.proposal < prevP - 1e-9) {
             kind = 'missed';
+          } else if (prevP === null && s.proposal === 0) {
+            kind = 'missed'; // first reading at 0: every slot so far failed
           } else {
-            kind = 'idle';
+            kind = 'ok';
           }
           const tip =
             kind === 'nodata'
               ? `${time} · no data`
-              : `${time} · epoch ${s.epoch} · ${
-                  kind === 'proposed' ? 'proposed ✓' : kind === 'missed' ? 'missed leader slot ✗' : 'no leader slot'
-                }${s.proposal !== null ? ` · missed slots ${fmtPct(1 - s.proposal, 1)}` : ''}`;
+              : kind === 'idle'
+                ? `${time} · epoch ${s.epoch} · no proposal data yet`
+                : `${time} · epoch ${s.epoch} · uptime ${fmtPct(s.proposal, 1)}${
+                    kind === 'missed' ? ' · missed leader slot ✗' : ''
+                  }`;
           return (
             <div key={s.t} className="flex h-5 items-stretch" title={tip}>
               {boundary && <span className="mr-px w-0.5 shrink-0" style={{ background: 'var(--border-strong)' }} />}
@@ -432,7 +434,7 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
                     ? { border: '1px solid var(--border)', background: 'transparent' }
                     : kind === 'idle'
                       ? { background: 'var(--card-soft)' }
-                      : { background: kind === 'proposed' ? 'var(--ok)' : 'var(--crit)' }
+                      : { background: kind === 'ok' ? 'var(--ok)' : 'var(--crit)' }
                 }
               />
             </div>

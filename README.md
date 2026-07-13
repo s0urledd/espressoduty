@@ -88,12 +88,13 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 
 ## Dashboard
 
-Each validator card leads with missed slots (vote participation sits as a
-small neutral figure in the stats row), and a 50-slot leader-duty grid: one
-cell per poll, green when the validator proposed successfully in that
-window, red when it missed a leader slot, faint when it had no slot (slots
-are sparse), empty when the poll returned no data. Thin lines mark epoch
-boundaries. The grid and counters survive restarts via `STATE_FILE`.
+Each validator card leads with uptime (proposal participation, the positive
+pole of missed slots; vote participation sits as a small neutral figure in
+the stats row), and a 50-slot leader-duty grid: one cell per poll, red when
+the rate fell in that window (missed leader slot), green when it rose or
+held steady (duty intact), faint until the epoch has proposal data, empty
+when the poll returned no data. Thin lines mark epoch boundaries. The grid
+and counters survive restarts via `STATE_FILE`.
 
 Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
 as on stake.espresso.network). Proposal tracking is live-only per node and
