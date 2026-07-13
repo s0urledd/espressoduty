@@ -79,8 +79,8 @@ npm run build
 pm2 start ecosystem.config.js   # or: docker compose up -d --build
 ```
 
-Dashboard: `http://localhost:3030`. Test alert:
-`curl -X POST http://localhost:3030/api/alert`
+Dashboard: `http://localhost:3030`. The startup alert doubles as a channel
+test: every configured channel gets a message each time espressoduty starts.
 
 A validator can be given as its L1 address instead of the BLS key —
 `MAINNET_VALIDATORS=Huginn=0xyouraddress` — and espressoduty resolves it
