@@ -24,22 +24,18 @@ export interface Config {
    */
   localNodeUrl: string | null;
   /**
-   * Participation alerting is trend-based: a "red poll" is one where the
-   * epoch average did not climb (the node missed views in that window),
-   * the same rule the dashboard grid uses. Chat channels alert after
-   * consecutiveDropsWarn red polls in a row; PagerDuty pages after
-   * consecutiveDropsCrit.
+   * Alerting is on the leader-duty axis: the cumulative proposal rate only
+   * moves when the validator IS leader, so a falling poll means a missed
+   * leader slot and a rising poll means a successful proposal. Chat
+   * channels alert after consecutiveMissesWarn missed-slot events in a
+   * row; PagerDuty pages after consecutiveMissesCrit. A successful
+   * proposal resets the streak.
    */
-  consecutiveDropsWarn: number;
-  consecutiveDropsCrit: number;
-  /**
-   * Display thresholds only (dashboard colors and card health), never
-   * alerts: missed slots colors when ABOVE, vote when BELOW.
-   */
+  consecutiveMissesWarn: number;
+  consecutiveMissesCrit: number;
+  /** Display thresholds for the missed-slots color only, never alerts. */
   missedWarn: number;
   missedCritical: number;
-  voteWarn: number;
-  voteCritical: number;
   decideStallSec: number;
   heightLagBlocks: number;
   /** Consecutive failed checks before the local node counts as down. */
@@ -112,12 +108,10 @@ export function loadConfig(): Config {
   cached = {
     networks,
     localNodeUrl: str('LOCAL_NODE_URL') || null,
-    consecutiveDropsWarn: Math.max(2, num('CONSECUTIVE_DROPS_WARN', 3)),
-    consecutiveDropsCrit: Math.max(3, num('CONSECUTIVE_DROPS_CRIT', 5)),
+    consecutiveMissesWarn: Math.max(1, num('CONSECUTIVE_MISSES_WARN', 2)),
+    consecutiveMissesCrit: Math.max(2, num('CONSECUTIVE_MISSES_CRIT', 3)),
     missedWarn: num('MISSED_WARN', 0.5),
     missedCritical: num('MISSED_CRITICAL', 0.9),
-    voteWarn: num('VOTE_WARN', 0.9),
-    voteCritical: num('VOTE_CRITICAL', 0.5),
     decideStallSec: num('DECIDE_STALL_SEC', 60),
     heightLagBlocks: num('HEIGHT_LAG_BLOCKS', 50),
     localDownFails: Math.max(2, num('LOCAL_DOWN_FAILS', 3)),

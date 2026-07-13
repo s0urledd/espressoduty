@@ -14,21 +14,12 @@ import { Activity, Copy, Github, Moon, Sun, Check } from 'lucide-react';
 import clsx from 'clsx';
 import type { Snapshot, NetworkView, ValidatorView } from '@/lib/state';
 
-// Thresholds mirrored for display only; the server enforces the real ones.
-const VOTE_WARN = Number(process.env.NEXT_PUBLIC_VOTE_WARN ?? 0.9);
-const VOTE_CRIT = Number(process.env.NEXT_PUBLIC_VOTE_CRITICAL ?? 0.5);
+// Display thresholds for the missed-slots color; the server owns alerting.
 const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
 const MISSED_CRIT = Number(process.env.NEXT_PUBLIC_MISSED_CRITICAL ?? 0.9);
 
 const NO_SLOTS_HINT =
   'No proposal data reported for this epoch yet; a value appears as soon as a source has it';
-
-function rateColor(rate: number | null): string {
-  if (rate === null) return 'var(--idle)';
-  if (rate < VOTE_CRIT) return 'var(--crit)';
-  if (rate < VOTE_WARN) return 'var(--warn)';
-  return 'var(--ok)';
-}
 
 /** Missed slots: higher is worse. */
 function missedColor(missed: number | null): string {
@@ -316,11 +307,8 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
         </button>
       </div>
 
-      {/* Big number + status dot per metric. Missed slots is Espresso's
-          headline (1 - proposal_participation); with no proposal data for
-          the epoch there is nothing known to be missed, shown as 0%. */}
-      <div className="mb-4 grid grid-cols-2 gap-4">
-        <Metric label="vote" value={v.vote} dot={rateColor(v.vote)} />
+      {/* Leader duty is the health metric; everything else is context. */}
+      <div className="mb-4">
         <Metric
           label="missed slots"
           value={v.missedSlots}
@@ -332,6 +320,9 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
       <PollGrid samples={v.samples} />
 
       <p className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs" style={{ color: 'var(--muted)' }}>
+        <span title="Informational: measures the QC quorum race (latency), not node health">
+          {v.vote === null ? '— vote' : `${fmtPct(v.vote, 1)} vote`}
+        </span>
         <span>{v.stakeEsp === null ? '— ESP' : `${fmtInt(Math.round(v.stakeEsp))} ESP`}</span>
         <span>{v.delegatorCount === null ? '— delegators' : `${fmtInt(v.delegatorCount)} delegator${v.delegatorCount === 1 ? '' : 's'}`}</span>
         <span>{v.commission === null ? '— commission' : `${(v.commission / 100).toFixed(2)}% commission`}</span>
@@ -382,14 +373,12 @@ function Metric({
 }
 
 /**
- * tenderduty-style grid, kept honest: one cell is ONE POLL, not a block.
- * Espresso only exposes the cumulative epoch average, so a cell is colored
- * purely by the trend during that poll window: the average climbing, by
- * however little, means the node voted right then (green); falling or not
- * climbing means it missed views (red). A saturated average (~100%) stays
- * green when flat, since there is no room left to climb. The first cell of
- * an epoch has no trend and renders neutral; an empty bordered cell means
- * that poll returned no data. Thin vertical lines mark epoch boundaries.
+ * Leader-duty grid: one cell per poll. The cumulative proposal rate only
+ * moves when this validator IS the leader, so the per-poll change is a
+ * real event: green = proposed successfully in that window, red = missed
+ * leader slot(s), faint = no leader slot observed (slots are sparse by
+ * nature), empty bordered = the poll returned no data. Thin vertical
+ * lines mark epoch boundaries.
  */
 const GRID_SLOTS = 50;
 
@@ -401,47 +390,50 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="label">vote participation · per poll</span>
+        <span className="label">leader slots · per poll</span>
         <span className="label">{recent.length} polls</span>
       </div>
-      {/* Exactly GRID_SLOTS equal columns across the full card width: bars
-          keep the same comfortable size whether 3 polls or 50 are in the
-          buffer, and fill in left to right. */}
       <div className="grid gap-px" style={{ gridTemplateColumns: `repeat(${GRID_SLOTS}, 1fr)` }}>
         {recent.map((s, i) => {
           const prev = recent[i - 1];
           const boundary = prev !== undefined && prev.epoch !== null && s.epoch !== null && prev.epoch !== s.epoch;
           const time = new Date(s.t).toLocaleTimeString('en-US', { hour12: false });
-          const sameEpochPrev =
-            prev !== undefined && prev.vote !== null && prev.epoch === s.epoch ? prev.vote : null;
-          const rising = s.vote !== null && sameEpochPrev !== null && s.vote > sameEpochPrev + 1e-6;
-          const saturated = s.vote !== null && s.vote >= 0.995;
-          const color =
-            s.vote === null
-              ? null
-              : sameEpochPrev === null
-                ? saturated
-                  ? 'var(--ok)'
-                  : 'var(--idle)'
-                : rising || saturated
-                  ? 'var(--ok)'
-                  : 'var(--crit)';
-          const trend =
-            s.vote === null || sameEpochPrev === null
-              ? ''
-              : rising || saturated
-                ? ' ↑ voting'
-                : ' ↓ missing views';
+          const noData = s.vote === null && s.proposal === null;
+          const prevP =
+            prev !== undefined && prev.epoch === s.epoch && prev.proposal !== null ? prev.proposal : null;
+          let kind: 'proposed' | 'missed' | 'idle' | 'nodata';
+          if (noData) {
+            kind = 'nodata';
+          } else if (s.proposal === null) {
+            kind = 'idle';
+          } else if (prevP === null) {
+            // first reading this epoch: 0 means every slot so far was missed
+            kind = s.proposal === 0 ? 'missed' : s.proposal === 1 ? 'proposed' : 'idle';
+          } else if (s.proposal > prevP + 1e-9) {
+            kind = 'proposed';
+          } else if (s.proposal < prevP - 1e-9) {
+            kind = 'missed';
+          } else {
+            kind = 'idle';
+          }
           const tip =
-            s.vote === null
+            kind === 'nodata'
               ? `${time} · no data`
-              : `${time} · epoch ${s.epoch} · vote ${fmtPct(s.vote)}${trend}`;
+              : `${time} · epoch ${s.epoch} · ${
+                  kind === 'proposed' ? 'proposed ✓' : kind === 'missed' ? 'missed leader slot ✗' : 'no leader slot'
+                }${s.proposal !== null ? ` · missed slots ${fmtPct(1 - s.proposal, 1)}` : ''}`;
           return (
             <div key={s.t} className="flex h-5 items-stretch" title={tip}>
               {boundary && <span className="mr-px w-0.5 shrink-0" style={{ background: 'var(--border-strong)' }} />}
               <span
                 className="w-full rounded-[3px]"
-                style={color === null ? { border: '1px solid var(--border)', background: 'transparent' } : { background: color }}
+                style={
+                  kind === 'nodata'
+                    ? { border: '1px solid var(--border)', background: 'transparent' }
+                    : kind === 'idle'
+                      ? { background: 'var(--card-soft)' }
+                      : { background: kind === 'proposed' ? 'var(--ok)' : 'var(--crit)' }
+                }
               />
             </div>
           );

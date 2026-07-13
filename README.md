@@ -5,9 +5,9 @@
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 
 Uptime monitoring and alerting for [Espresso Network](https://espressosys.com/)
-validators. Polls vote participation every minute, alerts when it keeps
-dropping, watches your node's liveness, and pages you over Telegram, Discord,
-Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
+validators. Watches leader duty (missed slots) poll by poll, alerts on
+consecutive missed leader slots, checks your node's liveness, and pages you
+over Telegram, Discord, Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
 events.
 
 ![dashboard, light theme](docs/dashboard-light.png)
@@ -19,21 +19,30 @@ events.
 
 </details>
 
-## The alert rule
+## The alert rule: leader duty
 
-Espresso publishes participation as a per-epoch average, so a healthy node's
-number climbs every poll and a node that misses views drags it down. The rule
-is exactly that:
+A validator is only on the critical path when it is the **leader**: miss
+your slot and the view times out; miss a vote as a non-leader and the QC
+closes at ~2/3 quorum without you. Vote participation therefore mostly
+measures the quorum race (network latency, geography), not node health —
+which is why Espresso's own dashboard leads with missed slots and so does
+espressoduty.
 
-- vote dropped **3 polls in a row** (`CONSECUTIVE_DROPS_WARN`) → Telegram /
-  Slack / Discord
-- vote dropped **5 polls in a row** (`CONSECUTIVE_DROPS_CRIT`) → PagerDuty
-- first rising poll → recovery message, PagerDuty incident resolved
+The cumulative proposal rate only moves when your validator is leader, so
+its per-poll change is a real event:
+
+- rate fell = **missed leader slot**. `CONSECUTIVE_MISSES_WARN` (2) in a
+  row → Telegram / Slack / Discord; `CONSECUTIVE_MISSES_CRIT` (3) →
+  PagerDuty. One isolated miss can be bad luck; a streak means the node is
+  failing its critical duty.
+- rate rose = **successful proposal** → streak resets, recovery sent,
+  PagerDuty incident resolved.
+- rate flat = no leader slot in that window (slots are sparse, that is
+  normal).
 
 Counters persist to `STATE_FILE`, so a bot restart continues the streak
 instead of forgetting it. An epoch rollover resets counters cleanly (rates
-restart near zero by design — that is not an alert) and resolves anything
-left open.
+restart by design — that is not an alert) and resolves anything left open.
 
 Also watched:
 
@@ -44,7 +53,7 @@ Also watched:
 | Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails) / lagging (`HEIGHT_LAG_BLOCKS`) | critical / warning |
 | Start / shutdown | info |
 
-While the local node is down or lagging, the drop counter freezes: the
+While the local node is down or lagging, the miss counter freezes: the
 local-node alert is the root cause, participation dips are its symptom.
 Every alert has a paired recovery and repeats respect a cooldown.
 
@@ -71,7 +80,7 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | `MAINNET_VALIDATORS` | — | `Label=BLS_VER_KEY~...`, comma separated |
 | `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
 | `LOCAL_NODE_URL` | — | Your node's query service, enables local checks |
-| `CONSECUTIVE_DROPS_WARN` / `CONSECUTIVE_DROPS_CRIT` | `3` / `5` | The alert rule |
+| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `2` / `3` | Missed leader slots in a row |
 | `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `3` / `50` | Local node monitoring |
 | `POLL_INTERVAL_SEC` | `60` | Poll cadence |
 | `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
@@ -79,11 +88,12 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 
 ## Dashboard
 
-Each validator card shows vote and missed slots as big numbers with status
-dots, and a 50-slot poll grid: one cell per poll, green when the average
-climbed in that window (the node voted), red when it fell (missed views),
-empty when the poll returned no data. Thin lines mark epoch boundaries. The
-grid and counters survive restarts via `STATE_FILE`.
+Each validator card leads with missed slots (vote participation sits as a
+small neutral figure in the stats row), and a 50-slot leader-duty grid: one
+cell per poll, green when the validator proposed successfully in that
+window, red when it missed a leader slot, faint when it had no slot (slots
+are sparse), empty when the poll returned no data. Thin lines mark epoch
+boundaries. The grid and counters survive restarts via `STATE_FILE`.
 
 Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
 as on stake.espresso.network). Proposal tracking is live-only per node and

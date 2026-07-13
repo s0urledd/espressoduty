@@ -10,15 +10,18 @@ import type { NetworkName } from './config';
 export type ValidatorHealth = 'ok' | 'warn' | 'crit' | 'missing' | 'unknown';
 
 /**
- * One participation poll (POLL_INTERVAL_SEC apart). vote is null when that
- * poll produced no data (query failed or the key was absent). Espresso has
- * no per-block signed/missed stream, so the dashboard's grid is honest
- * about being per-poll, never per-block.
+ * One participation poll (POLL_INTERVAL_SEC apart). Both fields null =
+ * the poll produced no data at all. proposal is the cumulative leader-duty
+ * rate; the grid colors each poll window by how it CHANGED (rose = you
+ * proposed, fell = you missed a slot, flat = no leader slot observed).
+ * Espresso has no per-slot event stream, so this per-poll derivative is
+ * the honest closest thing.
  */
 export interface PollSample {
   t: number;
   epoch: number | null;
   vote: number | null;
+  proposal: number | null;
 }
 
 export interface ValidatorView {
