@@ -88,8 +88,9 @@ grid and counters survive restarts via `STATE_FILE`.
 Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
 as on stake.espresso.network). Proposal tracking is live-only per node and
 the public endpoint balances over backends with differing state, so sources
-are probed until one has the data, and a value seen once is held for the
-epoch. With no proposal data there is nothing known to be missed: 0%.
+are probed until one has the data. A value seen once is held for the epoch
+and survives restarts; 0% only ever means the data really says 0%, and
+"no data" means no source has reported proposal data for the epoch yet.
 
 ## Data sources
 
