@@ -64,7 +64,7 @@ Every alert has a paired recovery and repeats respect a cooldown.
 ```bash
 git clone https://github.com/s0urledd/espressoduty.git
 cd espressoduty
-cp .env.example .env   # add your BLS key and channels
+cp .env.example .env   # add your validator and channels
 npm install
 npm run build
 pm2 start ecosystem.config.js   # or: docker compose up -d --build
@@ -73,14 +73,9 @@ pm2 start ecosystem.config.js   # or: docker compose up -d --build
 Dashboard: `http://localhost:3030`. Test alert:
 `curl -X POST http://localhost:3030/api/alert`
 
-Don't know your BLS key? Look it up from your validator's L1 account
-(the address must be lowercase):
-
-```bash
-Q=https://query.main.net.espresso.network/v1
-EPOCH=$(curl -s $Q/node/stake-table/current | jq .epoch)
-curl -s $Q/node/validators/$EPOCH | jq -r '."0xyouraddress".stake_table_key'
-```
+A validator can be given as its L1 address instead of the BLS key —
+`MAINNET_VALIDATORS=Huginn=0xyouraddress` — and espressoduty resolves it
+to the BLS key from the registry on the first poll.
 
 ## Configuration
 
@@ -88,7 +83,7 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MAINNET_VALIDATORS` | — | `Label=BLS_VER_KEY~...`, comma separated |
+| `MAINNET_VALIDATORS` | — | `Label=0xaddress` or `Label=BLS_VER_KEY~...`, comma separated |
 | `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
 | `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
 | `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `1` / `3` | Missed leader slots: chat / PagerDuty |

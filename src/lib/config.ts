@@ -75,14 +75,29 @@ function list(name: string): string[] {
     .filter(Boolean);
 }
 
-/** Entries are either a bare key or `Label=BLS_VER_KEY~...`. */
+const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Entries are a BLS key, an L1 address (resolved to the BLS key on the
+ * first poll), or either with a `Label=` prefix.
+ */
 function parseValidators(name: string): WatchedValidator[] {
   return list(name).map((entry) => {
     const eq = entry.indexOf('=');
-    if (eq > 0 && entry.slice(eq + 1).startsWith('BLS_VER_KEY~')) {
-      return { label: entry.slice(0, eq).trim(), key: entry.slice(eq + 1).trim() };
+    let label = '';
+    let value = entry;
+    if (eq > 0) {
+      const rest = entry.slice(eq + 1).trim();
+      if (rest.startsWith('BLS_VER_KEY~') || ADDR_RE.test(rest)) {
+        label = entry.slice(0, eq).trim();
+        value = rest;
+      }
     }
-    return { label: shortKey(entry), key: entry };
+    if (ADDR_RE.test(value)) {
+      const addr = value.toLowerCase();
+      return { label: label || `${addr.slice(0, 6)}…${addr.slice(-4)}`, key: addr };
+    }
+    return { label: label || shortKey(value), key: value };
   });
 }
 
