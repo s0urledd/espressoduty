@@ -13,11 +13,11 @@ const { resolve } = eval('require')('path') as typeof import('path');
 
 export interface PersistedCounter {
   epoch: number;
-  lastVote: number;
-  dropCount: number;
+  /** Consecutive missed leader slots. */
+  missCount: number;
   warnSent: boolean;
   critSent: boolean;
-  /** Unix ms when the current drop streak started, for recovery durations. */
+  /** Unix ms when the current miss streak started, for recovery durations. */
   since: number | null;
   /** Last proposal rate seen this epoch, so missed slots survives restarts. */
   heldProposal: number | null;

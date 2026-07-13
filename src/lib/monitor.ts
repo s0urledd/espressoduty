@@ -25,11 +25,9 @@ const cfg = loadConfig();
 
 interface ValidatorMachine {
   initialized: boolean;
-  /** Last same-epoch vote sample, for the red/green poll judgement. */
-  lastVote: number | null;
   lastEpoch: number | null;
-  /** Consecutive red polls: the epoch average failed to climb. */
-  redStreak: number;
+  /** Consecutive missed leader slots (falling proposal-rate events). */
+  missStreak: number;
   trendAlerted: boolean;
   trendPaged: boolean;
   trendSince: number | null;
@@ -168,9 +166,8 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
         v.key,
         {
           initialized: false,
-          lastVote: null,
           lastEpoch: null,
-          redStreak: 0,
+          missStreak: 0,
           trendAlerted: false,
           trendPaged: false,
           trendSince: null,
@@ -277,7 +274,7 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     console.error(`[monitor] ${net.name} participation poll failed: ${err instanceof Error ? err.message : err}`);
     // Record the gap so the dashboard grid shows an honest empty cell.
     const t = Date.now();
-    for (const vv of m.view.validators) pushSample(vv, { t, epoch: m.epoch, vote: null });
+    for (const vv of m.view.validators) pushSample(vv, { t, epoch: m.epoch, vote: null, proposal: null });
     publish();
     return;
   }
@@ -325,9 +322,10 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     const vm = m.validators.get(vv.key)!;
     const vote = Object.prototype.hasOwnProperty.call(voteMap, vv.key) ? voteMap[vv.key] : null;
     const inProposalMap = Object.prototype.hasOwnProperty.call(proposalMap, vv.key);
-    // Key-in-map presence is the source of truth for dash vs number, but a
-    // value seen earlier this epoch is held so one poll without the key
-    // cannot flip the card back to a dash.
+    // Key-in-map presence is the source of truth, but a value seen earlier
+    // this epoch is held so one incomplete poll cannot blank the card. The
+    // previous held value is the baseline the leader-duty events compare to.
+    const prevRate = vm.heldProposal;
     if (inProposalMap) vm.heldProposal = proposalMap[vv.key];
     const proposal = inProposalMap ? proposalMap[vv.key] : vm.heldProposal;
 
@@ -341,14 +339,15 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     // renders as a dash until a source reports it (the probe plus the
     // per-epoch hold make that window short).
     vv.missedSlots = proposal === null ? null : 1 - proposal;
-    pushSample(vv, { t: Date.now(), epoch, vote });
+    pushSample(vv, { t: Date.now(), epoch, vote, proposal });
 
     if (vote === null) {
       await onValidatorMissing(net, m, vv, vm, epoch, suppressed);
     } else {
-      await evaluateTrend(net, vv, vm, vote, epoch, suppressed);
+      await evaluateLeaderDuty(net, vv, vm, prevRate, proposal, epoch, suppressed);
     }
     vv.health = healthOf(vv, vm);
+    vm.lastEpoch = epoch;
     vm.initialized = true;
   }
 
@@ -362,11 +361,10 @@ function persistAll(): void {
   for (const [name, m] of machines) {
     for (const vv of m.view.validators) {
       const vm = m.validators.get(vv.key)!;
-      if (vm.lastVote === null || vm.lastEpoch === null) continue;
+      if (vm.lastEpoch === null) continue;
       out[`${name}:${vv.key}`] = {
         epoch: vm.lastEpoch,
-        lastVote: vm.lastVote,
-        dropCount: vm.redStreak,
+        missCount: vm.missStreak,
         warnSent: vm.trendAlerted,
         critSent: vm.trendPaged,
         since: vm.trendSince,
@@ -382,42 +380,44 @@ function persistAll(): void {
 const NEAR_ZERO_VOTE = 0.05;
 
 /**
- * Health follows Espresso's delegator-facing model: missed slots drives it
- * whenever proposal data exists; vote participation is secondary and never
- * forces crit on its own (it is a slow-moving epoch average). With no leader
- * slots yet, vote is informational unless the node is in the active set and
- * barely voting at all.
+ * Health is leader-duty: missed slots drives it whenever proposal data
+ * exists. Vote participation is informational only (it measures the QC
+ * quorum race, i.e. latency, not node health).
  */
 function healthOf(vv: ValidatorView, vm: ValidatorMachine): ValidatorView['health'] {
   if (vm.missingAlerted || (vm.missingCount >= 2 && vm.initialized)) return 'missing';
   if (vv.vote === null) return 'unknown';
-  // Branch on real proposal data, not the displayed missed value: with no
-  // data, missed shows an assumed 0% which must not drive health.
   if (vv.proposal !== null) {
     const missed = 1 - vv.proposal;
     if (missed > cfg.missedCritical) return 'crit';
     if (missed > cfg.missedWarn) return 'warn';
-    return vv.vote < cfg.voteWarn ? 'warn' : 'ok';
+    return 'ok';
   }
+  // No leader-duty data yet: only a barely-voting active node is alarming.
   if (vv.vote < NEAR_ZERO_VOTE && vv.inActiveSet === true) return 'crit';
-  return vv.vote < cfg.voteWarn ? 'warn' : 'ok';
+  return 'ok';
 }
 
 /**
- * The alert rule, exactly as the operator runs it: polls are ~1 minute
- * apart, and a dropping epoch average means views were missed in that
- * window. CONSECUTIVE_DROPS_WARN drops in a row notify the chat channels;
- * CONSECUTIVE_DROPS_CRIT pages PagerDuty. A rising (or equal) poll clears
- * the streak and sends the paired recovery. Counters persist to
- * STATE_FILE, so a bot restart continues the streak instead of forgetting
- * it; an epoch rollover resets it cleanly (rates restart near zero, that
- * is expected, not an alert).
+ * Leader-duty state machine. The cumulative proposal rate only moves when
+ * this validator IS the leader, so its per-poll change is a real event:
+ * fell = missed leader slot(s) in that window, rose = proposed
+ * successfully, flat = no leader slot observed. Vote participation is
+ * deliberately not alerted on: a non-leader vote is not on the critical
+ * path (the QC closes at ~2/3 quorum without it), so its rate measures
+ * network latency more than node health.
+ *
+ * consecutiveMissesWarn missed-slot events in a row notify the chat
+ * channels; consecutiveMissesCrit pages PagerDuty; a successful proposal
+ * clears the streak and sends the paired recovery. State persists to
+ * STATE_FILE and an epoch rollover resets it cleanly.
  */
-async function evaluateTrend(
+async function evaluateLeaderDuty(
   net: NetworkConfig,
   vv: ValidatorView,
   vm: ValidatorMachine,
-  vote: number,
+  prevRate: number | null,
+  proposal: number | null,
   epoch: number,
   suppressed: boolean,
 ): Promise<void> {
@@ -427,10 +427,7 @@ async function evaluateTrend(
     await sendAlert({
       severity: 'recovered',
       title: `${vv.label} back in the participation map`,
-      lines: [
-        `Gone for ${vm.missingSince ? dur(vm.missingSince) : '?'}`,
-        `Vote participation: ${pct(vote)} (epoch ${epoch})`,
-      ],
+      lines: [`Gone for ${vm.missingSince ? dur(vm.missingSince) : '?'}`, `Epoch ${epoch}`],
       network: net.name,
       link: explorerLink(net),
     });
@@ -454,14 +451,14 @@ async function evaluateTrend(
   if (suppressed) return;
 
   if (vm.lastEpoch !== epoch) {
-    // Rollover: rates reset to ~0 by design. Clean reset, and close any
-    // incident left open so PagerDuty is not left dangling.
+    // Rollover: rates reset by design. Clean reset, and close any incident
+    // left open so PagerDuty is not left dangling.
     if (vm.trendPaged) {
       vm.trendPaged = false;
       await sendAlert({
         severity: 'recovered',
         title: `${vv.label} epoch rolled over`,
-        lines: [`Epoch ${epoch} started, drop counters reset`],
+        lines: [`Epoch ${epoch} started, leader-slot counters reset`],
         network: net.name,
         dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
         pagerduty: 'resolve',
@@ -472,73 +469,81 @@ async function evaluateTrend(
       await sendAlert({
         severity: 'recovered',
         title: `${vv.label} epoch rolled over`,
-        lines: [`Epoch ${epoch} started, drop counters reset`],
+        lines: [`Epoch ${epoch} started, leader-slot counters reset`],
         network: net.name,
       });
     }
-    vm.redStreak = 0;
+    vm.missStreak = 0;
     vm.trendSince = null;
-  } else if (vm.lastVote !== null) {
-    if (vote < vm.lastVote - 1e-9) {
-      vm.redStreak += 1;
-      if (vm.trendSince === null) vm.trendSince = Date.now();
-      if (!vm.trendAlerted && vm.redStreak >= cfg.consecutiveDropsWarn && cooldownOk(`${net.name}:${vv.key}:trend`)) {
-        vm.trendAlerted = true;
-        await sendAlert({
-          severity: 'warning',
-          title: `${vv.label} is missing views`,
-          lines: [
-            `Vote dropped ${vm.redStreak} polls in a row`,
-            `Epoch ${epoch} vote participation: ${pct(vote)}`,
-          ],
-          network: net.name,
-          link: explorerLink(net),
-        });
-      }
-      if (!vm.trendPaged && vm.redStreak >= cfg.consecutiveDropsCrit) {
-        vm.trendPaged = true;
-        await sendAlert({
-          severity: 'critical',
-          title: `${vv.label} is missing views`,
-          lines: [`${vm.redStreak} consecutive dropping polls, vote ${pct(vote)}`],
-          network: net.name,
-          dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
-          pagerduty: 'trigger',
-        });
-      }
-    } else {
-      const wasAlerted = vm.trendAlerted;
-      const wasPaged = vm.trendPaged;
-      const since = vm.trendSince;
-      vm.redStreak = 0;
-      vm.trendAlerted = false;
-      vm.trendPaged = false;
-      vm.trendSince = null;
-      if (wasAlerted) {
-        await sendAlert({
-          severity: 'recovered',
-          title: `${vv.label} is voting again`,
-          lines: [
-            `Missed views for ${since ? dur(since) : '?'}`,
-            `Epoch ${epoch} vote participation: ${pct(vote)}`,
-          ],
-          network: net.name,
-        });
-      }
-      if (wasPaged) {
-        await sendAlert({
-          severity: 'recovered',
-          title: `${vv.label} is voting again`,
-          lines: [`Vote climbing, ${pct(vote)}`],
-          network: net.name,
-          dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
-          pagerduty: 'resolve',
-        });
-      }
+    vm.lastEpoch = epoch;
+    return; // the first reading of a fresh epoch is a baseline, not an event
+  }
+
+  if (proposal === null) return; // no leader-duty data yet this epoch
+
+  // First appearance in the map is an event too: a rate of 0 means every
+  // slot so far was missed; anything else seeds the baseline silently.
+  const fell = prevRate !== null ? proposal < prevRate - 1e-9 : proposal === 0;
+  const rose = prevRate !== null ? proposal > prevRate + 1e-9 : proposal > 0;
+
+  if (fell) {
+    vm.missStreak += 1;
+    if (vm.trendSince === null) vm.trendSince = Date.now();
+    if (!vm.trendAlerted && vm.missStreak >= cfg.consecutiveMissesWarn && cooldownOk(`${net.name}:${vv.key}:trend`)) {
+      vm.trendAlerted = true;
+      await sendAlert({
+        severity: 'warning',
+        title: `${vv.label} missed a leader slot`,
+        lines: [
+          `${vm.missStreak} missed leader slots in a row`,
+          `Epoch ${epoch} missed slots: ${pct(1 - proposal)}`,
+        ],
+        network: net.name,
+        link: explorerLink(net),
+      });
+    }
+    if (!vm.trendPaged && vm.missStreak >= cfg.consecutiveMissesCrit) {
+      vm.trendPaged = true;
+      await sendAlert({
+        severity: 'critical',
+        title: `${vv.label} keeps missing leader slots`,
+        lines: [`${vm.missStreak} in a row, missed slots ${pct(1 - proposal)}`],
+        network: net.name,
+        dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
+        pagerduty: 'trigger',
+      });
+    }
+  } else if (rose) {
+    const wasAlerted = vm.trendAlerted;
+    const wasPaged = vm.trendPaged;
+    const since = vm.trendSince;
+    vm.missStreak = 0;
+    vm.trendAlerted = false;
+    vm.trendPaged = false;
+    vm.trendSince = null;
+    if (wasAlerted) {
+      await sendAlert({
+        severity: 'recovered',
+        title: `${vv.label} proposed a block`,
+        lines: [
+          `Leader duty back after ${since ? dur(since) : '?'}`,
+          `Epoch ${epoch} missed slots: ${pct(1 - proposal)}`,
+        ],
+        network: net.name,
+      });
+    }
+    if (wasPaged) {
+      await sendAlert({
+        severity: 'recovered',
+        title: `${vv.label} proposed a block`,
+        lines: [`Missed slots ${pct(1 - proposal)}`],
+        network: net.name,
+        dedupKey: `espressoduty:${net.name}:${shortKey(vv.key)}:trend`,
+        pagerduty: 'resolve',
+      });
     }
   }
-  vm.lastVote = vote;
-  vm.lastEpoch = epoch;
+  // flat: no leader slot observed in this window, nothing to judge
 }
 
 async function onValidatorMissing(
@@ -819,8 +824,7 @@ export function startMonitoring(): void {
       if (!p) continue;
       const vm = m.validators.get(vv.key)!;
       vm.lastEpoch = p.epoch;
-      vm.lastVote = p.lastVote;
-      vm.redStreak = p.dropCount ?? 0;
+      vm.missStreak = p.missCount ?? 0;
       vm.trendAlerted = !!p.warnSent;
       vm.trendPaged = !!p.critSent;
       vm.trendSince = p.since ?? null;
@@ -857,7 +861,7 @@ export function startMonitoring(): void {
     title: 'espressoduty started',
     lines: [
       watched ? `Watching: ${watched}` : 'No validators configured yet',
-      `Poll: ${cfg.pollIntervalSec}s. Warn after ${cfg.consecutiveDropsWarn} drops, page after ${cfg.consecutiveDropsCrit}`,
+      `Poll: ${cfg.pollIntervalSec}s. Warn after ${cfg.consecutiveMissesWarn} missed leader slots in a row, page after ${cfg.consecutiveMissesCrit}`,
       `Channels: ${store.channels.join(', ') || 'none'}`,
       cfg.localNodeUrl ? 'Local node checks enabled' : 'Local node checks disabled',
     ],
