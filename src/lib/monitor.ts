@@ -79,10 +79,10 @@ interface LocalMachine {
   /** Public query node used as the reference height for the lag check. */
   remoteBase: string | null;
   lastDecidedView: number | null;
-  stuckCount: number;
   stuckAlerted: boolean;
   stuckSince: number | null;
   stuckPdTriggered: boolean;
+  downPdTriggered: boolean;
 }
 
 const machines = new Map<NetworkName, NetworkMachine>();
@@ -787,8 +787,18 @@ async function pollLocalNode(): Promise<void> {
         title: 'Local node back online',
         lines: [`Reachable again${lm.downSince ? `, down for ${dur(lm.downSince)}` : ''}`],
       });
-      lm.downSince = null;
+      if (lm.downPdTriggered) {
+        lm.downPdTriggered = false;
+        await sendAlert({
+          severity: 'recovered',
+          title: 'Local node back online',
+          lines: ['Reachable again'],
+          dedupKey: 'espressoduty:local:down',
+          pagerduty: 'resolve',
+        });
+      }
     }
+    lm.downSince = null;
 
     // Lag is measured against a public query node, not our own view of the
     // height — the main client may itself be reading from the local node.
@@ -867,13 +877,14 @@ async function pollLocalNode(): Promise<void> {
               });
             }
           }
-          lm.stuckCount = 0;
           lm.stuckSince = null;
           view.stuck = false;
         } else if (networkOk) {
-          lm.stuckCount += 1;
           if (lm.stuckSince === null) lm.stuckSince = Date.now();
-          if (lm.stuckCount >= cfg.localDownFails) {
+          const stuckFor = Date.now() - lm.stuckSince;
+          // A view pausing for seconds is routine; only a sustained freeze
+          // while the network progresses is worth waking anyone for.
+          if (stuckFor >= cfg.stuckAfterMin * 60_000) {
             view.stuck = true;
             if (lm.initialized && !lm.stuckAlerted && cooldownOk('local:stuck')) {
               lm.stuckAlerted = true;
@@ -881,20 +892,20 @@ async function pollLocalNode(): Promise<void> {
                 severity: 'critical',
                 title: 'Node consensus stuck',
                 lines: [
-                  `last_decided_view has not advanced for ${lm.stuckCount} checks (view ${metrics.lastDecidedView})`,
+                  `last_decided_view frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`,
                   'The network is progressing, your node is not',
                 ],
               });
-              if (!lm.stuckPdTriggered) {
-                lm.stuckPdTriggered = true;
-                await sendAlert({
-                  severity: 'critical',
-                  title: 'Node consensus stuck',
-                  lines: [`View frozen at ${metrics.lastDecidedView}`],
-                  dedupKey: 'espressoduty:local:stuck',
-                  pagerduty: 'trigger',
-                });
-              }
+            }
+            if (lm.stuckAlerted && !lm.stuckPdTriggered && stuckFor >= cfg.localDownPageMin * 60_000) {
+              lm.stuckPdTriggered = true;
+              await sendAlert({
+                severity: 'critical',
+                title: 'Node consensus stuck',
+                lines: [`View frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`],
+                dedupKey: 'espressoduty:local:stuck',
+                pagerduty: 'trigger',
+              });
             }
           }
         }
@@ -910,13 +921,29 @@ async function pollLocalNode(): Promise<void> {
     if (lm.failCount >= cfg.localDownFails) {
       view.reachable = false;
       view.lagBlocks = null;
+      if (lm.downSince === null) lm.downSince = Date.now();
       if (lm.initialized && !lm.downAlerted && cooldownOk('local:down')) {
         lm.downAlerted = true;
-        lm.downSince = Date.now();
         await sendAlert({
           severity: 'critical',
           title: 'Local node unreachable',
           lines: [`${cfg.localNodeUrl} failed ${lm.failCount} consecutive checks`],
+        });
+      }
+      // Chat hears about it once, immediately; PagerDuty only if the node
+      // has not come back within the escalation window.
+      if (
+        lm.downAlerted &&
+        !lm.downPdTriggered &&
+        Date.now() - lm.downSince >= cfg.localDownPageMin * 60_000
+      ) {
+        lm.downPdTriggered = true;
+        await sendAlert({
+          severity: 'critical',
+          title: 'Local node unreachable',
+          lines: [`Down for ${dur(lm.downSince)}`],
+          dedupKey: 'espressoduty:local:down',
+          pagerduty: 'trigger',
         });
       }
     }
@@ -977,10 +1004,10 @@ export function startMonitoring(): void {
       initialized: false,
       remoteBase: mainnet?.queryNodes[0] ?? null,
       lastDecidedView: null,
-      stuckCount: 0,
       stuckAlerted: false,
       stuckSince: null,
       stuckPdTriggered: false,
+      downPdTriggered: false,
     };
     store.localNode = {
       url: cfg.localNodeUrl,
