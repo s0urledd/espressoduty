@@ -126,7 +126,7 @@ function Header({ live }: { live: boolean }) {
             className="rounded-full border p-2 transition-opacity hover:opacity-70"
             style={{ borderColor: 'var(--border)', color: 'var(--label)' }}
           >
-            {resolvedTheme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            {resolvedTheme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
         )}
       </div>
@@ -137,7 +137,7 @@ function Header({ live }: { live: boolean }) {
 function EmptyState({ loaded }: { loaded: boolean }) {
   return (
     <div className="card flex flex-col items-center gap-2 px-6 py-16 text-center">
-      <Activity size={20} style={{ color: 'var(--label)' }} />
+      <Activity size={22} style={{ color: 'var(--label)' }} />
       <p style={{ color: 'var(--text-strong)' }}>{loaded ? 'No validators configured' : 'Loading…'}</p>
       {loaded && (
         <p className="text-sm" style={{ color: 'var(--muted)' }}>
@@ -268,7 +268,7 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
           {v.label}
         </h3>
         <span
-          className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+          className="rounded-full px-2 py-0.5 text-[0.6875rem] font-medium"
           style={{ color: badge.color, background: badge.bg }}
         >
           {badge.text}
@@ -279,7 +279,7 @@ function ValidatorCard({ v }: { v: ValidatorView }) {
           className="ml-auto flex shrink-0 items-center gap-1 text-xs transition-opacity hover:opacity-70"
           style={{ color: 'var(--muted)' }}
         >
-          {v.key.slice(0, 20)}…{copied ? <Check size={11} /> : <Copy size={11} />}
+          {v.key.slice(0, 20)}…{copied ? <Check size={12} /> : <Copy size={12} />}
         </button>
       </div>
 
@@ -325,20 +325,21 @@ function MissedCount({ v }: { v: ValidatorView }) {
   const count = local ? (v.missedLeaderSlots ?? 0) : v.epochMissCount;
   return (
     <div
+      className="text-right"
       title={
         local
           ? `${count} of ${v.leaderSlots} leader slots missed since the node started`
           : 'Missed-slot events observed this epoch'
       }
     >
-      <p className="mb-1 flex items-center gap-1.5">
+      <p className="mb-1 flex items-center justify-end gap-1.5">
         <span
           className="h-2 w-2 shrink-0 rounded-full"
           style={{ background: count > 0 ? 'var(--crit)' : 'var(--ok)' }}
         />
         <span className="label">missed slots</span>
       </p>
-      <p className="text-[26px] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
+      <p className="text-[1.625rem] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
         {count}
         {local && (
           <span className="text-sm" style={{ color: 'var(--muted)' }}>
@@ -375,7 +376,7 @@ function Metric({
           no data
         </p>
       ) : (
-        <p className="text-[26px] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
+        <p className="text-[1.625rem] font-medium leading-none tabular-nums" style={{ color: 'var(--text-strong)' }}>
           {num}
           <span className="text-sm" style={{ color: 'var(--muted)' }}>
             %
@@ -479,7 +480,7 @@ function Footer() {
         className="transition-opacity hover:opacity-70"
         style={{ color: 'var(--muted)' }}
       >
-        <Github size={18} />
+        <Github size={20} />
       </a>
     </footer>
   );

@@ -39,6 +39,11 @@
   --idle: rgba(252, 235, 222, 0.25);
 }
 
+/* Everything is sized in rem, so the whole UI scales off this one knob. */
+html {
+  font-size: 110%;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
