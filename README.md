@@ -82,6 +82,10 @@ pm2 start ecosystem.config.js   # or: docker compose up -d --build
 Dashboard: `http://localhost:3030`. The startup alert doubles as a channel
 test: every configured channel gets a message each time espressoduty starts.
 
+The dashboard is read-only but unauthenticated — keep it on localhost or a
+VPN, or put an authenticated reverse proxy in front before exposing it
+(the docker-compose file binds to loopback for this reason).
+
 A validator can be given as its L1 address instead of the BLS key —
 `MAINNET_VALIDATORS=Huginn=0xyouraddress` — and espressoduty resolves it
 to the BLS key from the registry on the first poll.
@@ -108,8 +112,10 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 Each validator card shows uptime (proposal participation, the positive
 pole of missed slots) and, beside it, the raw missed-slot count: exact
 numbers from your node's metrics when a local node is configured
-(`0 / 35`, since node start) or the miss events observed this epoch
-otherwise. Vote participation sits as a small neutral figure in the stats
+(`0 / 35`, since node start), or a slot count reconstructed from the
+participation rate otherwise — the cumulative rate is a proposed/total
+fraction behind a decimal, so espressoduty recovers the fraction and
+counts actual slots, even when several land inside one poll window. Vote participation sits as a small neutral figure in the stats
 row. Below, a 50-slot leader-duty grid: one cell per poll, red when
 the rate fell in that window (missed leader slot), green when it rose or
 held steady (duty intact), faint until the epoch has proposal data, empty

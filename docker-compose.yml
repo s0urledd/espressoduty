@@ -4,5 +4,8 @@ services:
     container_name: espressoduty
     env_file: .env
     ports:
-      - '3030:3030'
+      # Loopback only: the dashboard is read-only but unauthenticated.
+      # To serve it beyond this host, put an authenticated reverse proxy
+      # in front instead of widening this binding.
+      - '127.0.0.1:3030:3030'
     restart: unless-stopped

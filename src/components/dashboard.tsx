@@ -329,7 +329,7 @@ function MissedCount({ v }: { v: ValidatorView }) {
       title={
         local
           ? `${count} of ${v.leaderSlots} leader slots missed since the node started`
-          : 'Missed-slot events observed this epoch'
+          : 'Missed slots this epoch, reconstructed from the participation rate'
       }
     >
       <p className="mb-1 flex items-center justify-end gap-1.5">

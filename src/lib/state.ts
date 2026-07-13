@@ -127,11 +127,17 @@ export function getStore(): Store {
 
 export function snapshot(): Snapshot {
   const s = getStore();
+  // The operator's node address is internal topology; the browser only
+  // needs to know that a local source exists, so LOCAL_NODE_URL never
+  // leaves the server.
   return {
     startedAt: s.startedAt,
     now: Date.now(),
-    networks: [...s.networks.values()],
-    localNode: s.localNode,
+    networks: [...s.networks.values()].map((n) => ({
+      ...n,
+      endpoints: n.endpoints.map((e) => (e.isLocal ? { ...e, url: 'local' } : e)),
+    })),
+    localNode: s.localNode ? { ...s.localNode, url: 'local' } : null,
     channels: s.channels,
   };
 }
