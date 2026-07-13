@@ -41,8 +41,74 @@ interface ValidatorMachine {
    * flip the card back to a dash. Reset at epoch rollover.
    */
   heldProposal: number | null;
-  /** Miss events observed this epoch. */
+  /** Missed slots this epoch (slot-exact via the reconstructed fraction). */
   epochMissCount: number;
+  /** proposed/total behind the cumulative rate. Reset at epoch rollover. */
+  propFrac: Frac | null;
+}
+
+// ---------------------------------------------------------------------------
+// Fraction reconstruction
+//
+// The cumulative rate is proposed/total with small integers, serialized as
+// a full-precision double — so the fraction can be recovered from the
+// decimal. Tracking (ok, n) across the epoch turns "the rate fell" into an
+// exact number of missed slots even when several leader slots landed inside
+// one poll window; without this, public mode (no per-slot counters to read)
+// would count one event per poll no matter how many slots were missed.
+// ---------------------------------------------------------------------------
+
+interface Frac {
+  ok: number;
+  n: number;
+}
+
+const FRAC_EPS = 1e-9;
+const FRAC_MAX_DENOM = 100_000;
+/** How many new leader slots one update may span (covers long gaps). */
+const FRAC_SEARCH = 5_000;
+
+/** Smallest fraction within FRAC_EPS of r, via continued-fraction convergents. */
+function smallestFrac(r: number): Frac | null {
+  if (r <= 0) return { ok: 0, n: 1 };
+  if (r >= 1) return { ok: 1, n: 1 };
+  let h0 = 0, h1 = 1, k0 = 1, k1 = 0;
+  let x = r;
+  for (let i = 0; i < 64; i++) {
+    const a = Math.floor(x);
+    [h0, h1] = [h1, a * h1 + h0];
+    [k0, k1] = [k1, a * k1 + k0];
+    if (k1 > FRAC_MAX_DENOM) return null;
+    if (k1 > 0 && Math.abs(h1 / k1 - r) <= FRAC_EPS) return { ok: h1, n: k1 };
+    const rest = x - a;
+    if (rest < 1e-15) break;
+    x = 1 / rest;
+  }
+  return null;
+}
+
+/**
+ * Smallest extension of f consistent with a later observation r: the total
+ * only grows, and the proposed count grows by at most the new slots. The
+ * smallest consistent total is the conservative reading (never overcounts).
+ */
+function extendFrac(f: Frac, r: number): Frac | null {
+  for (let n = f.n + 1; n <= f.n + FRAC_SEARCH; n++) {
+    const ok = Math.min(f.ok + (n - f.n), Math.max(f.ok, Math.round(r * n)));
+    if (Math.abs(ok / n - r) <= FRAC_EPS) return { ok, n };
+  }
+  return null;
+}
+
+/** Update the tracked fraction; epochMissCount = misses this epoch (n - ok). */
+function updateFraction(vm: ValidatorMachine, r: number): void {
+  const f = vm.propFrac;
+  if (f && Math.abs(f.ok / f.n - r) <= FRAC_EPS) return; // rate unchanged
+  const next = f ? (extendFrac(f, r) ?? smallestFrac(r)) : smallestFrac(r);
+  if (!next) return; // unreconstructable float; the per-event fallback counts
+  vm.propFrac = next;
+  // max(): a re-seed after a failed extension must not shrink the count.
+  vm.epochMissCount = Math.max(vm.epochMissCount, next.n - next.ok);
 }
 
 interface NetworkMachine {
@@ -188,6 +254,7 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
           missingPdTriggered: false,
           heldProposal: null,
           epochMissCount: 0,
+          propFrac: null,
         } satisfies ValidatorMachine,
       ]),
     ),
@@ -316,7 +383,10 @@ async function pollParticipation(net: NetworkConfig): Promise<void> {
     // streak deliberately survives: a node missing views across a rollover
     // is still missing views. The boundary poll itself is neutral (no
     // same-epoch trend to judge).
-    for (const vm of m.validators.values()) vm.heldProposal = null;
+    for (const vm of m.validators.values()) {
+      vm.heldProposal = null;
+      vm.propFrac = null;
+    }
   }
   if (m.epoch !== epoch) {
     m.epoch = epoch;
@@ -398,6 +468,8 @@ function persistAll(): void {
         since: vm.trendSince,
         heldProposal: vm.heldProposal,
         epochMissCount: vm.epochMissCount,
+        propOk: vm.propFrac?.ok ?? null,
+        propN: vm.propFrac?.n ?? null,
         samples: vv.samples.slice(-50),
       };
     }
@@ -505,11 +577,17 @@ async function evaluateLeaderDuty(
     vm.missStreak = 0;
     vm.trendSince = null;
     vm.epochMissCount = 0;
+    vm.propFrac = null;
     vm.lastEpoch = epoch;
     return; // the first reading of a fresh epoch is a baseline, not an event
   }
 
   if (proposal === null) return; // no leader-duty data yet this epoch
+
+  // Slot-exact missed count from the reconstructed fraction; the streak
+  // below stays per-poll (it drives escalation, not the counter).
+  const hadFrac = vm.propFrac !== null;
+  updateFraction(vm, proposal);
 
   // First appearance in the map is an event too: a rate of 0 means every
   // slot so far was missed; anything else seeds the baseline silently.
@@ -518,7 +596,8 @@ async function evaluateLeaderDuty(
 
   if (fell) {
     vm.missStreak += 1;
-    vm.epochMissCount += 1;
+    // Only when reconstruction is unavailable; otherwise the fraction owns the count.
+    if (vm.propFrac === null && !hadFrac) vm.epochMissCount += 1;
     if (vm.trendSince === null) vm.trendSince = Date.now();
     if (!vm.trendAlerted && vm.missStreak >= cfg.consecutiveMissesWarn && cooldownOk(`${net.name}:${vv.key}:trend`)) {
       vm.trendAlerted = true;
@@ -649,6 +728,8 @@ async function refreshIdentity(net: NetworkConfig, m: NetworkMachine, epoch: num
         vm.trendSince = p.since ?? null;
         vm.heldProposal = typeof p.heldProposal === 'number' ? p.heldProposal : null;
         vm.epochMissCount = p.epochMissCount ?? 0;
+        vm.propFrac =
+          typeof p.propOk === 'number' && typeof p.propN === 'number' ? { ok: p.propOk, n: p.propN } : null;
         if (vv.samples.length === 0 && Array.isArray(p.samples)) vv.samples.push(...p.samples.slice(-50));
       }
     }
@@ -1019,6 +1100,8 @@ export function startMonitoring(): void {
       // Epoch-scoped: the first poll's rollover branch clears it if stale.
       vm.heldProposal = typeof p.heldProposal === 'number' ? p.heldProposal : null;
       vm.epochMissCount = p.epochMissCount ?? 0;
+      vm.propFrac =
+        typeof p.propOk === 'number' && typeof p.propN === 'number' ? { ok: p.propOk, n: p.propN } : null;
       if (Array.isArray(p.samples)) vv.samples.push(...p.samples.slice(-50));
     }
     void pollParticipation(net);
