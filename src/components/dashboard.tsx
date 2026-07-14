@@ -18,8 +18,7 @@ import type { Snapshot, NetworkView, ValidatorView } from '@/lib/state';
 const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
 const MISSED_CRIT = Number(process.env.NEXT_PUBLIC_MISSED_CRITICAL ?? 0.9);
 
-const NO_SLOTS_HINT =
-  'No proposal data reported for this epoch yet; a value appears as soon as a source has it';
+const NO_SLOTS_HINT = 'No leader slots assigned yet this epoch';
 
 /** Missed slots: higher is worse. */
 function missedColor(missed: number | null): string {
@@ -171,12 +170,11 @@ function NetworkSection({ net, localNode }: { net: NetworkView; localNode: Snaps
 function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot['localNode'] }) {
   const tsld = net.timeSinceLastDecide;
   const alive = tsld !== null && tsld <= 60;
-  const tsldColor = tsld === null ? 'var(--idle)' : tsld > 60 ? 'var(--crit)' : tsld > 15 ? 'var(--warn)' : 'var(--ok)';
   const active = net.endpoints.find((e) => e.isActive);
   const source = active ? (active.isLocal ? 'local' : new URL(active.url).host.split('.')[0]) : '—';
 
   return (
-    <div className="card flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3 text-sm">
+    <div className="card flex flex-wrap items-center gap-x-8 gap-y-2 px-5 py-3 text-sm">
       <span className="flex items-center gap-2">
         <span
           className={clsx('h-2 w-2 rounded-full', alive && 'live-dot')}
@@ -187,7 +185,6 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
         </span>
       </span>
       <Field k="height" v={fmtInt(net.height)} />
-      <Field k="decide" v={tsld === null ? '—' : `${Math.round(tsld)}s`} color={tsldColor} />
       <Field k="epoch" v={net.epoch === null ? '—' : String(net.epoch)} />
       <Field k="src" v={source} title={active?.url} />
       {localNode && (
@@ -328,8 +325,8 @@ function MissedCount({ v }: { v: ValidatorView }) {
       className="text-right"
       title={
         local
-          ? `${count} of ${v.leaderSlots} leader slots missed since the node started`
-          : 'Missed slots this epoch, reconstructed from the participation rate'
+          ? `${count} of ${v.leaderSlots} leader slots missed this epoch (chain data)`
+          : 'Missed slots this epoch'
       }
     >
       <p className="mb-1 flex items-center justify-end gap-1.5">

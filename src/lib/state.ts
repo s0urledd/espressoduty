@@ -39,16 +39,17 @@ export interface ValidatorView {
   /** Raw proposal participation rate, 0.0-1.0. */
   proposal: number | null;
   /**
-   * The delegator-facing headline: 1 - proposal_participation, same formula
-   * as stake.espresso.network. Always numeric after the first poll: with no
-   * proposal data for the epoch (proposal === null) nothing is known to be
-   * missed, so it reads 0. Alerting keys off real proposal data only.
+   * The delegator-facing headline: 1 - proposals/slots, the same number
+   * stake.espresso.network shows (both read the chain-derived staking API).
    */
   missedSlots: number | null;
-  /** Exact counts from the node's own metrics (since node start); null without a local node. */
+  /**
+   * Chain-derived counts for this epoch (staking API). While the staking
+   * API is unreachable, the local node's own counters fill in as a backup.
+   */
   leaderSlots: number | null;
   missedLeaderSlots: number | null;
-  /** Miss events observed this epoch (either data path). */
+  /** Missed slots this epoch (same as missedLeaderSlots; kept for the API). */
   epochMissCount: number;
   health: ValidatorHealth;
   /** Ring buffer of recent polls for the dashboard grid. */

@@ -42,15 +42,15 @@ export function GET() {
 
     for (const v of net.validators) {
       const vl = { network: net.name, validator: v.label };
-      gauge('espressoduty_proposal_participation_ratio', 'Leader-duty uptime this epoch (0-1)', [[vl, v.proposal]]);
+      gauge('espressoduty_proposal_participation_ratio', 'Leader-duty uptime this epoch (0-1, chain-derived)', [
+        [vl, v.proposal],
+      ]);
       gauge('espressoduty_vote_participation_ratio', 'Vote participation this epoch (0-1, informational)', [
         [vl, v.vote],
       ]);
-      gauge('espressoduty_epoch_miss_events', 'Missed-slot events observed this epoch', [[vl, v.epochMissCount]]);
-      gauge('espressoduty_leader_slots_total', 'Leader slots since node start (local node only)', [
-        [vl, v.leaderSlots],
-      ]);
-      gauge('espressoduty_missed_leader_slots_total', 'Missed leader slots since node start (local node only)', [
+      gauge('espressoduty_epoch_miss_events', 'Missed leader slots this epoch', [[vl, v.epochMissCount]]);
+      gauge('espressoduty_leader_slots_total', 'Leader slots this epoch (chain-derived)', [[vl, v.leaderSlots]]);
+      gauge('espressoduty_missed_leader_slots_total', 'Missed leader slots this epoch (chain-derived)', [
         [vl, v.missedLeaderSlots],
       ]);
       gauge('espressoduty_in_active_set', 'Validator is in the active set (0/1)', [

@@ -22,27 +22,32 @@ measures the quorum race (network latency, geography), not node health —
 which is why Espresso's own dashboard leads with missed slots and so does
 espressoduty.
 
-The cumulative proposal rate only moves when your validator is leader, so
-its per-poll change is a real event:
+Missed slots are counted by the chain itself: the staking API's per-epoch
+proposed/total counters, the same numbers stake.espresso.network shows.
+That matters — a node can miss a slot without ever noticing (its proposal
+never reached quorum, its own timer never fired), and a query node that
+didn't witness the miss reports a clean rate. The chain is the only
+neutral witness. Poll to poll:
 
-- rate fell = **missed leader slot**. `CONSECUTIVE_MISSES_WARN` (3) in a
-  row → Telegram / Slack / Discord; `CONSECUTIVE_MISSES_CRIT` (5) in a
-  row → PagerDuty. A streak means the node is failing its critical duty;
-  a successful proposal clears it.
-- rate rose = **successful proposal** → streak resets, recovery sent,
-  PagerDuty incident resolved.
-- rate flat = no leader slot in that window (slots are sparse, that is
+- missed count rose = **missed leader slot(s)**. `CONSECUTIVE_MISSES_WARN`
+  (3) in a row → Telegram / Slack / Discord; `CONSECUTIVE_MISSES_CRIT` (5)
+  in a row → PagerDuty. A streak means the node is failing its critical
+  duty; a successful proposal clears it.
+- proposal count rose = **successful proposal** → streak resets, recovery
+  sent, PagerDuty incident resolved.
+- neither moved = no leader slot in that window (slots are sparse, that is
   normal).
 
-Counters persist to `STATE_FILE`, so a bot restart continues the streak
-instead of forgetting it. An epoch rollover resets counters cleanly (rates
-restart by design — that is not an alert) and resolves anything left open.
+Counters persist to `STATE_FILE`: a restart continues the streak, and a
+miss that lands during the restart still shows up as a delta afterwards.
+An epoch rollover resets counters cleanly (they restart with the epoch by
+design — that is not an alert) and resolves anything left open.
 
 Also watched:
 
 | Alert | Severity |
 |---|---|
-| Validator missing from the participation map (dropped from set / wrong key) | critical, pages |
+| Validator not in the active set (dropped out / wrong key or address) | critical, pages |
 | No decide for 60s, cross-checked against other endpoints first | critical (warning if only the endpoint is stale) |
 | Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails): chat immediately, PagerDuty if still down after `LOCAL_DOWN_PAGE_MIN` (10m) | critical |
 | Local node lagging (`HEIGHT_LAG_BLOCKS`) | warning |
@@ -61,12 +66,15 @@ pings stop.
 
 ## Local vs public mode
 
-- **Local mode** (`LOCAL_NODE_URL` set): exact missed-slot counts from your
-  node's Prometheus counters (`0 / 35`), instant stuck detection via the
-  decide-view counter, plus the node-down and sync-lag alerts.
-- **Public-only mode**: the missed count is derived from the proposal rate,
-  and a dead node only shows up as a participation drop — delayed, but no
-  node-side setup needed.
+Missed slots and votes come from the chain in both modes — no node-side
+setup is needed for accurate counts.
+
+- **Local mode** (`LOCAL_NODE_URL` set) adds node health: node-down and
+  sync-lag alerts, instant stuck detection via the decide-view counter,
+  and the node's own counters back up the dashboard if the staking API is
+  ever unreachable.
+- **Public-only mode**: a dead node is only visible once it misses leader
+  slots on chain — delayed, but nothing to install.
 
 ## Quick start
 
@@ -93,7 +101,8 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | Variable | Default | Purpose |
 |---|---|---|
 | `MAINNET_VALIDATORS` | — | `Label=0xaddress` or `Label=BLS_VER_KEY~...`, comma separated |
-| `QUERY_NODE` | public query service | Data source; comma-separate extras for failover |
+| `STAKING_API` | cache.main.net | Chain-derived missed-slot / vote counts; comma-separate extras for failover |
+| `QUERY_NODE` | public query service | Identity and network status; comma-separate extras for failover |
 | `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
 | `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `3` / `5` | Missed leader slots: chat / PagerDuty |
 | `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `5` / `50` | Local node monitoring |
@@ -105,25 +114,14 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 
 ## Dashboard
 
-Each validator card shows uptime (proposal participation, the positive
-pole of missed slots) and, beside it, the raw missed-slot count: exact
-numbers from your node's metrics when a local node is configured
-(`0 / 35`, since node start), or a slot count reconstructed from the
-participation rate otherwise — the cumulative rate is a proposed/total
-fraction behind a decimal, so espressoduty recovers the fraction and
-counts actual slots, even when several land inside one poll window. Vote participation sits as a small neutral figure in the stats
-row. Below, a 50-slot leader-duty grid: one cell per poll, red when
+Each validator card shows uptime (proposals / leader slots this epoch)
+and, beside it, the raw missed-slot count (`1 / 56`) — chain-derived, the
+exact numbers stake.espresso.network shows. Vote participation sits as a
+small neutral figure in the stats row. Below, a 50-slot leader-duty grid: one cell per poll, red when
 the rate fell in that window (missed leader slot), green when it rose or
 held steady (duty intact), faint until the epoch has proposal data, empty
 when the poll returned no data. Thin lines mark epoch boundaries. The grid
 and counters survive restarts via `STATE_FILE`.
-
-Missed slots is Espresso's own headline metric (`1 - proposal_participation`,
-as on stake.espresso.network). Proposal tracking is live-only per node and
-the public endpoint balances over backends with differing state, so sources
-are probed until one has the data. A value seen once is held for the epoch
-and survives restarts; 0% only ever means the data really says 0%, and
-"no data" means no source has reported proposal data for the epoch yet.
 
 ## Prometheus (optional)
 
@@ -134,20 +132,18 @@ config, nothing else depends on it.
 
 ## Data sources
 
-Espresso query service (`/v1`), semantics verified against the node's own
-API reference:
-
-- `node/participation/vote/current`: fraction of views properly voted
-- `node/participation/proposal/current`: fraction of leader slots proposed
-  properly; missed slots = 1 - value
-- `node/stake-table/current`: epoch number, set membership, stake
-- `node/validators/:epoch`: account, commission, delegators
+- `staking/nodes/active` (staking API): per-validator leader-slot and vote
+  counts for the current epoch, derived from the chain — missed slots,
+  uptime, votes and set membership all come from here
+- `node/validators/:epoch` (query service): account, stake, commission,
+  delegators, and the 0x address → BLS key resolution
 - `status/block-height`, `status/time-since-last-decide`: chain height and
   network liveness (the chain-stall check)
-- `status/metrics` (local node only): Prometheus counters — exact
-  leader-slot counts and `last_decided_view`, the instant stuck check
+- `status/metrics` (local node only): the `last_decided_view` counter for
+  the instant stuck check; the node's leader counters serve as a display
+  backup while the staking API is unreachable
 
-Each poll is served by a single source (local node when in sync, public
-otherwise) so subjective per-node views are never mixed.
+Sources fail over in order; the status line's `src` shows which one served
+the last poll.
 
 MIT licensed.
