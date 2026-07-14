@@ -43,6 +43,25 @@ The dashboard is read-only but unauthenticated — keep it on localhost or a
 VPN, or put an authenticated reverse proxy in front before exposing it
 (the docker-compose file binds to loopback for this reason).
 
+## Configuration
+
+Everything lives in `.env` ([.env.example](.env.example) is the full list):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MAINNET_VALIDATORS` | — | `Label=0xaddress` or `Label=BLS_VER_KEY~...`, comma separated |
+| `TESTNET_VALIDATORS` | — | Same shapes, Decaf network; empty = testnet never polled |
+| `STAKING_API` | cache.main.net | Chain-derived missed-slot / vote counts; comma-separate extras for failover |
+| `QUERY_NODE` | public query service | Identity and network status; comma-separate extras for failover |
+| `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
+| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `3` / `5` | Missed leader slots: chat / PagerDuty |
+| `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `5` / `50` | Local node monitoring |
+| `LOCAL_DOWN_PAGE_MIN` / `STUCK_AFTER_MIN` | `10` / `5` | Minutes before down pages / stuck alerts |
+| `POLL_INTERVAL_SEC` | `60` | Poll cadence |
+| `HEARTBEAT_URL` | — | Dead man's switch: GET after every successful poll |
+| `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, `PAGERDUTY_ROUTING_KEY` | — | Channels |
+
 ## The alert rule: leader duty
 
 A validator is only on the critical path when it is the **leader**: miss
@@ -95,25 +114,6 @@ set `HEARTBEAT_URL`: a GET fires after every successful poll, and a service
 like [healthchecks.io](https://healthchecks.io) or
 [Uptime Kuma](https://github.com/louislam/uptime-kuma) alerts you when the
 pings stop.
-
-## Configuration
-
-Everything lives in `.env` ([.env.example](.env.example) is the full list):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `MAINNET_VALIDATORS` | — | `Label=0xaddress` or `Label=BLS_VER_KEY~...`, comma separated |
-| `TESTNET_VALIDATORS` | — | Same shapes, Decaf network; empty = testnet never polled |
-| `STAKING_API` | cache.main.net | Chain-derived missed-slot / vote counts; comma-separate extras for failover |
-| `QUERY_NODE` | public query service | Identity and network status; comma-separate extras for failover |
-| `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |
-| `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `3` / `5` | Missed leader slots: chat / PagerDuty |
-| `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `5` / `50` | Local node monitoring |
-| `LOCAL_DOWN_PAGE_MIN` / `STUCK_AFTER_MIN` | `10` / `5` | Minutes before down pages / stuck alerts |
-| `POLL_INTERVAL_SEC` | `60` | Poll cadence |
-| `HEARTBEAT_URL` | — | Dead man's switch: GET after every successful poll |
-| `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
-| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, `PAGERDUTY_ROUTING_KEY` | — | Channels |
 
 ## Dashboard
 
