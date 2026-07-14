@@ -13,6 +13,36 @@ events.
 <img width="906" height="576" alt="image" src="https://github.com/user-attachments/assets/cab41479-a8d8-4050-8a71-924d8e0696f1" />
 
 
+## Local vs public mode
+
+Missed slots and votes come from the chain in both modes — no node-side
+setup is needed for accurate counts.
+
+- **Local mode** (`LOCAL_NODE_URL` set) adds node health: node-down and
+  sync-lag alerts, instant stuck detection via the decide-view counter,
+  and the node's own counters back up the dashboard if the staking API is
+  ever unreachable.
+- **Public-only mode**: a dead node is only visible once it misses leader
+  slots on chain — delayed, but nothing to install.
+
+## Quick start
+
+```bash
+git clone https://github.com/s0urledd/espressoduty.git
+cd espressoduty
+cp .env.example .env   # add your validator and channels
+npm install
+npm run build
+pm2 start ecosystem.config.js   # or: docker compose up -d --build
+```
+
+Dashboard: `http://localhost:3030`. The startup alert doubles as a channel
+test: every configured channel gets a message each time espressoduty starts.
+
+The dashboard is read-only but unauthenticated — keep it on localhost or a
+VPN, or put an authenticated reverse proxy in front before exposing it
+(the docker-compose file binds to loopback for this reason).
+
 ## The alert rule: leader duty
 
 A validator is only on the critical path when it is the **leader**: miss
@@ -65,36 +95,6 @@ set `HEARTBEAT_URL`: a GET fires after every successful poll, and a service
 like [healthchecks.io](https://healthchecks.io) or
 [Uptime Kuma](https://github.com/louislam/uptime-kuma) alerts you when the
 pings stop.
-
-## Local vs public mode
-
-Missed slots and votes come from the chain in both modes — no node-side
-setup is needed for accurate counts.
-
-- **Local mode** (`LOCAL_NODE_URL` set) adds node health: node-down and
-  sync-lag alerts, instant stuck detection via the decide-view counter,
-  and the node's own counters back up the dashboard if the staking API is
-  ever unreachable.
-- **Public-only mode**: a dead node is only visible once it misses leader
-  slots on chain — delayed, but nothing to install.
-
-## Quick start
-
-```bash
-git clone https://github.com/s0urledd/espressoduty.git
-cd espressoduty
-cp .env.example .env   # add your validator and channels
-npm install
-npm run build
-pm2 start ecosystem.config.js   # or: docker compose up -d --build
-```
-
-Dashboard: `http://localhost:3030`. The startup alert doubles as a channel
-test: every configured channel gets a message each time espressoduty starts.
-
-The dashboard is read-only but unauthenticated — keep it on localhost or a
-VPN, or put an authenticated reverse proxy in front before exposing it
-(the docker-compose file binds to loopback for this reason).
 
 ## Configuration
 
