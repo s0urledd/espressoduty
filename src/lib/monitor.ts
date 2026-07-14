@@ -294,7 +294,8 @@ async function pollStaking(net: NetworkConfig): Promise<void> {
   // Root-cause suppression: while the local node is down or lagging, its
   // outage is the alert; missed slots are the symptom. The chain still
   // counts them (the card stays honest), they are just not re-alerted.
-  const suppressed = localNodeUnhealthy();
+  // The local node is the operator's MAINNET node — testnet is unaffected.
+  const suppressed = net.name === 'mainnet' && localNodeUnhealthy();
 
   for (const vv of m.view.validators) {
     const vm = m.validators.get(vv.key)!;

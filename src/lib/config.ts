@@ -140,6 +140,25 @@ export function loadConfig(): Config {
     });
   }
 
+  // Testnet (Decaf). Nothing is polled unless TESTNET_VALIDATORS is set —
+  // an unused section costs zero requests.
+  const testnetValidators = parseValidators('TESTNET_VALIDATORS');
+  if (testnetValidators.length > 0) {
+    networks.push({
+      name: 'testnet',
+      validators: testnetValidators,
+      queryNodes:
+        list('TESTNET_QUERY_NODE').length > 0
+          ? list('TESTNET_QUERY_NODE')
+          : ['https://query.decaf.testnet.espresso.network/v1'],
+      stakingApis:
+        list('TESTNET_STAKING_API').length > 0
+          ? list('TESTNET_STAKING_API')
+          : ['https://cache.decaf.testnet.espresso.network/v0/staking'],
+      explorerUrl: str('TESTNET_EXPLORER_URL', 'https://explorer.decaf.testnet.espresso.network'),
+    });
+  }
+
   cached = {
     networks,
     localNodeUrl: str('LOCAL_NODE_URL') || null,
