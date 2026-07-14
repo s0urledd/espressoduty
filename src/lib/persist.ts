@@ -19,13 +19,12 @@ export interface PersistedCounter {
   critSent: boolean;
   /** Unix ms when the current miss streak started, for recovery durations. */
   since: number | null;
-  /** Last proposal rate seen this epoch, so missed slots survives restarts. */
-  heldProposal: number | null;
-  /** Missed slots this epoch. */
-  epochMissCount: number;
-  /** proposed/total behind the rate, so slot-exact counting survives restarts. */
-  propOk?: number | null;
-  propN?: number | null;
+  /**
+   * The chain's counters at the last poll: a miss that lands while
+   * espressoduty is restarting still shows up as a delta on the next poll.
+   */
+  prevProposals?: number | null;
+  prevMissed?: number | null;
   /** Last ~50 polls so the dashboard grid survives restarts too. */
   samples: PollSample[];
 }

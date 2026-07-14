@@ -12,6 +12,12 @@ export interface NetworkConfig {
   validators: WatchedValidator[];
   /** Query-service base URLs, e.g. https://query.main.net.espresso.network/v1 (first = primary). */
   queryNodes: string[];
+  /**
+   * Staking API base URLs (first = primary). Serves per-validator
+   * leader-slot and vote counts for the current epoch, derived from the
+   * chain itself — the source stake.espresso.network uses.
+   */
+  stakingApis: string[];
   explorerUrl: string;
 }
 
@@ -126,6 +132,10 @@ export function loadConfig(): Config {
       name: 'mainnet',
       validators: mainnetValidators,
       queryNodes: queryNodes.length > 0 ? queryNodes : ['https://query.main.net.espresso.network/v1'],
+      stakingApis:
+        list('STAKING_API').length > 0
+          ? list('STAKING_API')
+          : ['https://cache.main.net.espresso.network/v0/staking'],
       explorerUrl: str('MAINNET_EXPLORER_URL', 'https://explorer.main.net.espresso.network'),
     });
   }
