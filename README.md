@@ -103,6 +103,7 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | Variable | Default | Purpose |
 |---|---|---|
 | `MAINNET_VALIDATORS` | — | `Label=0xaddress` or `Label=BLS_VER_KEY~...`, comma separated |
+| `TESTNET_VALIDATORS` | — | Same shapes, Decaf network; empty = testnet never polled |
 | `STAKING_API` | cache.main.net | Chain-derived missed-slot / vote counts; comma-separate extras for failover |
 | `QUERY_NODE` | public query service | Identity and network status; comma-separate extras for failover |
 | `LOCAL_NODE_URL` | — | Your node's query service: local checks, instant stuck detection, exact slot counts |

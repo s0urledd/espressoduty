@@ -4,7 +4,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 const ENV_KEYS =
-  /^(MAINNET|QUERY|STAKING|CONSECUTIVE|LOCAL|HEIGHT|STUCK|POLL|STATE|TELEGRAM|SLACK|DISCORD|PAGERDUTY|ALERT|HEARTBEAT|STATUS|MISSED|DECIDE)/;
+  /^(MAINNET|TESTNET|QUERY|STAKING|CONSECUTIVE|LOCAL|HEIGHT|STUCK|POLL|STATE|TELEGRAM|SLACK|DISCORD|PAGERDUTY|ALERT|HEARTBEAT|STATUS|MISSED|DECIDE)/;
 
 async function fresh(env: Record<string, string>) {
   vi.resetModules();
@@ -59,6 +59,19 @@ describe('defaults', () => {
     expect(cfg.stuckAfterMin).toBe(5);
     expect(cfg.networks[0].stakingApis).toEqual(['https://cache.main.net.espresso.network/v0/staking']);
     expect(cfg.networks[0].queryNodes).toEqual(['https://query.main.net.espresso.network/v1']);
+  });
+
+  it('never creates a testnet network while TESTNET_VALIDATORS is empty', async () => {
+    const cfg = await fresh({ MAINNET_VALIDATORS: BLS });
+    expect(cfg.networks.map((n) => n.name)).toEqual(['mainnet']);
+  });
+
+  it('enables testnet with Decaf defaults when TESTNET_VALIDATORS is set', async () => {
+    const cfg = await fresh({ MAINNET_VALIDATORS: BLS, TESTNET_VALIDATORS: `Test=${ADDR}` });
+    const t = cfg.networks.find((n) => n.name === 'testnet')!;
+    expect(t.validators[0]).toEqual({ key: ADDR.toLowerCase(), label: 'Test' });
+    expect(t.stakingApis).toEqual(['https://cache.decaf.testnet.espresso.network/v0/staking']);
+    expect(t.queryNodes).toEqual(['https://query.decaf.testnet.espresso.network/v1']);
   });
 
   it('reads STAKING_API as a comma-separated failover list', async () => {
