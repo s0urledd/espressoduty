@@ -52,11 +52,13 @@ Also watched:
 | Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails): chat immediately, PagerDuty if still down after `LOCAL_DOWN_PAGE_MIN` (10m) | critical |
 | Local node lagging (`HEIGHT_LAG_BLOCKS`) | warning |
 | Node consensus stuck: reachable but `last_decided_view` frozen for `STUCK_AFTER_MIN` (5m) while the network progresses; PagerDuty after `LOCAL_DOWN_PAGE_MIN` (needs a local node with metrics) | critical |
+| Staking API unreachable for 60m (miss alerts paused meanwhile) | warning |
 | Start / shutdown | info |
 
-While the local node is down or lagging, the miss counter freezes: the
-local-node alert is the root cause, participation dips are its symptom.
-Every alert has a paired recovery and repeats respect a cooldown.
+While the local node is down or lagging, miss alerts are suppressed: the
+local-node alert is the root cause, the missed slots are its symptom (the
+counter itself keeps following the chain). Every alert has a paired
+recovery and repeats respect a cooldown.
 
 And for the one failure espressoduty cannot report itself — its own death —
 set `HEARTBEAT_URL`: a GET fires after every successful poll, and a service
@@ -117,11 +119,11 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 Each validator card shows uptime (proposals / leader slots this epoch)
 and, beside it, the raw missed-slot count (`1 / 56`) — chain-derived, the
 exact numbers stake.espresso.network shows. Vote participation sits as a
-small neutral figure in the stats row. Below, a 50-slot leader-duty grid: one cell per poll, red when
-the rate fell in that window (missed leader slot), green when it rose or
-held steady (duty intact), faint until the epoch has proposal data, empty
-when the poll returned no data. Thin lines mark epoch boundaries. The grid
-and counters survive restarts via `STATE_FILE`.
+small neutral figure in the stats row. Below, a 50-slot leader-duty grid:
+one cell per poll — red when a leader slot was missed in that window,
+green when duty was met or no slot landed, faint before the first leader
+slot of the epoch, empty when the poll returned no data. Thin lines mark
+epoch boundaries. The grid and counters survive restarts via `STATE_FILE`.
 
 ## Prometheus (optional)
 

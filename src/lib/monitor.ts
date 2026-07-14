@@ -27,7 +27,7 @@ const cfg = loadConfig();
 // Internal (non-view) state
 // ---------------------------------------------------------------------------
 
-interface ValidatorMachine {
+export interface ValidatorMachine {
   initialized: boolean;
   lastEpoch: number | null;
   /** Consecutive missed leader slots (chain-counted between polls). */
@@ -59,6 +59,9 @@ interface NetworkMachine {
   lastPartSource: string | null;
   /** When the staking API last answered; gates the local-metrics backup. */
   lastStakingOkAt: number | null;
+  /** Start of the current staking-API outage, if any. */
+  stakingDownSince: number | null;
+  stakingDownAlerted: boolean;
   stallAlerted: boolean;
   stallSince: number | null;
   stallPdTriggered: boolean;
@@ -184,6 +187,8 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
     epoch: null,
     lastPartSource: null,
     lastStakingOkAt: null,
+    stakingDownSince: null,
+    stakingDownAlerted: false,
     stallAlerted: false,
     stallSince: null,
     stallPdTriggered: false,
@@ -198,7 +203,7 @@ function initNetwork(net: NetworkConfig): NetworkMachine {
 // Staking poll (the main signal)
 // ---------------------------------------------------------------------------
 
-interface ActiveNode {
+export interface ActiveNode {
   address: string;
   votes: number;
   eligible_votes: number;
@@ -225,6 +230,13 @@ async function fetchNodesActive(net: NetworkConfig): Promise<{ data: NodesActive
   throw lastErr;
 }
 
+/**
+ * A blip is routine (failover + the next poll cover it), but a long outage
+ * means miss alerts are effectively paused — say so ONCE, quietly, after
+ * an hour. No PagerDuty: nothing is known to be wrong with the validator.
+ */
+const STAKING_DOWN_ALERT_MIN = 60;
+
 async function pollStaking(net: NetworkConfig): Promise<void> {
   const m = machines.get(net.name)!;
   let data: NodesActive;
@@ -236,9 +248,33 @@ async function pollStaking(net: NetworkConfig): Promise<void> {
     // Record the gap so the dashboard grid shows an honest empty cell.
     const t = Date.now();
     for (const vv of m.view.validators) pushSample(vv, { t, epoch: m.epoch, vote: null, proposal: null });
+    if (m.stakingDownSince === null) m.stakingDownSince = t;
+    if (
+      !m.stakingDownAlerted &&
+      t - m.stakingDownSince >= STAKING_DOWN_ALERT_MIN * 60_000 &&
+      cooldownOk(`${net.name}:staking-down`)
+    ) {
+      m.stakingDownAlerted = true;
+      await sendAlert({
+        severity: 'warning',
+        title: 'Data source unreachable',
+        lines: [`📡 staking API down ${dur(m.stakingDownSince)}`, '🔕 miss alerts paused until data returns'],
+        network: net.name,
+      });
+    }
     publish();
     return;
   }
+  if (m.stakingDownAlerted) {
+    m.stakingDownAlerted = false;
+    await sendAlert({
+      severity: 'recovered',
+      title: 'Data source back',
+      lines: [`📡 staking API${m.stakingDownSince ? ` · ⏱ down ${dur(m.stakingDownSince)}` : ''}`],
+      network: net.name,
+    });
+  }
+  m.stakingDownSince = null;
   m.lastPartSource = source;
   m.lastStakingOkAt = Date.now();
   for (const ev of m.view.endpoints) ev.isActive = ev.url === source;
@@ -370,7 +406,7 @@ function healthOf(vv: ValidatorView, vm: ValidatorMachine): ValidatorView['healt
  * An epoch rollover resets everything cleanly (counters restart with the
  * epoch by design — that is not an alert).
  */
-async function evaluateLeaderDuty(
+export async function evaluateLeaderDuty(
   net: NetworkConfig,
   vv: ValidatorView,
   vm: ValidatorMachine,
