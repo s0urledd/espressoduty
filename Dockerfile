@@ -14,6 +14,9 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3030 HOSTNAME=0.0.0.0
 RUN addgroup -S app && adduser -S app -G app
+# Writable home for STATE_FILE; docker-compose mounts a volume here so
+# counters survive image rebuilds and container recreation, not just restarts.
+RUN mkdir -p /data && chown app:app /data
 COPY --from=builder --chown=app:app /app/.next/standalone ./
 COPY --from=builder --chown=app:app /app/.next/static ./.next/static
 USER app

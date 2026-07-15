@@ -96,6 +96,11 @@ function cooldownOk(key: string): boolean {
   return true;
 }
 
+/** A failed delivery gives its cooldown back, so the retry isn't blocked. */
+function refundCooldown(key: string): void {
+  cooldowns.delete(key);
+}
+
 function dur(fromMs: number): string {
   const s = Math.max(1, Math.round((Date.now() - fromMs) / 1000));
   if (s < 60) return `${s}s`;
@@ -254,13 +259,13 @@ async function pollStaking(net: NetworkConfig): Promise<void> {
       t - m.stakingDownSince >= STAKING_DOWN_ALERT_MIN * 60_000 &&
       cooldownOk(`${net.name}:staking-down`)
     ) {
-      m.stakingDownAlerted = true;
-      await sendAlert({
+      m.stakingDownAlerted = await sendAlert({
         severity: 'warning',
         title: 'Data source unreachable',
         lines: [`📡 staking API down ${dur(m.stakingDownSince)}`, '🔕 miss alerts paused until data returns'],
         network: net.name,
       });
+      if (!m.stakingDownAlerted) refundCooldown(`${net.name}:staking-down`);
     }
     publish();
     return;
@@ -497,19 +502,20 @@ export async function evaluateLeaderDuty(
   if (dMissed > 0 && dProposed === 0) {
     vm.missStreak += dMissed;
     if (vm.trendSince === null) vm.trendSince = Date.now();
+    // Flags are set only when a channel actually took the message; a
+    // failed webhook refunds the cooldown and the next poll retries.
     if (!vm.trendAlerted && vm.missStreak >= cfg.consecutiveMissesWarn && cooldownOk(`${net.name}:${vv.key}:trend`)) {
-      vm.trendAlerted = true;
-      await sendAlert({
+      vm.trendAlerted = await sendAlert({
         severity: 'warning',
         title: 'Missed leader slot',
         lines: [`📍 ${vv.label}`, `📉 ${vm.missStreak} in a row · ${missed}/${entry.slots} this epoch`],
         network: net.name,
         link: explorerLink(net),
       });
+      if (!vm.trendAlerted) refundCooldown(`${net.name}:${vv.key}:trend`);
     }
     if (!vm.trendPaged && vm.missStreak >= cfg.consecutiveMissesCrit) {
-      vm.trendPaged = true;
-      await sendAlert({
+      vm.trendPaged = await sendAlert({
         severity: 'critical',
         title: 'Missing leader slots',
         lines: [`📍 ${vv.label}`, `📉 ${vm.missStreak} in a row · ${missed}/${entry.slots} this epoch`],
@@ -573,20 +579,19 @@ async function onValidatorMissing(
     classification = 'registry lookup failed';
   }
 
-  vm.missingAlerted = true;
   vm.missingSince = Date.now();
   if (cooldownOk(`${net.name}:${vv.key}:missing`)) {
-    await sendAlert({
+    vm.missingAlerted = await sendAlert({
       severity: 'critical',
       title: 'Not in the active set',
       lines: [`📍 ${vv.label}`, `🔎 ${classification}`],
       network: net.name,
       link: explorerLink(net),
     });
+    if (!vm.missingAlerted) refundCooldown(`${net.name}:${vv.key}:missing`);
     // Dropping out of the set entirely pages, like a critical missed-slots streak.
-    if (!vm.missingPdTriggered) {
-      vm.missingPdTriggered = true;
-      await sendAlert({
+    if (vm.missingAlerted && !vm.missingPdTriggered) {
+      vm.missingPdTriggered = await sendAlert({
         severity: 'critical',
         title: 'Not in the active set',
         lines: [`📍 ${vv.label}`, `🔎 ${classification}`],
@@ -595,6 +600,8 @@ async function onValidatorMissing(
         pagerduty: 'trigger',
       });
     }
+  } else {
+    vm.missingAlerted = true; // inside the cooldown window: suppress repeats
   }
 }
 
@@ -686,8 +693,7 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
     }
 
     if (!m.stallAlerted && cooldownOk(`${net.name}:stall`)) {
-      m.stallAlerted = true;
-      await sendAlert({
+      m.stallAlerted = await sendAlert({
         severity: secondarySeesProgress ? 'warning' : 'critical',
         title: secondarySeesProgress ? 'Query endpoint stale' : 'Chain stalled',
         lines: secondarySeesProgress
@@ -696,9 +702,9 @@ async function checkStall(net: NetworkConfig, m: NetworkMachine, tsld: number): 
         network: net.name,
         link: explorerLink(net),
       });
-      if (!secondarySeesProgress && !m.stallPdTriggered) {
-        m.stallPdTriggered = true;
-        await sendAlert({
+      if (!m.stallAlerted) refundCooldown(`${net.name}:stall`);
+      if (m.stallAlerted && !secondarySeesProgress && !m.stallPdTriggered) {
+        m.stallPdTriggered = await sendAlert({
           severity: 'critical',
           title: 'Chain stalled',
           lines: [`⏱ no decide for ${Math.round(tsld)}s`],
@@ -741,6 +747,8 @@ interface NodeMetrics {
   lastDecidedView: number | null;
   leaderSlots: number | null;
   timeoutsAsLeader: number | null;
+  /** The node's own BLS key, to back up the RIGHT card with multiple validators. */
+  nodeKey: string | null;
 }
 
 /**
@@ -768,6 +776,7 @@ async function fetchNodeMetrics(): Promise<NodeMetrics | null> {
       lastDecidedView: grab('consensus_last_decided_view'),
       leaderSlots: grab('consensus_view_duration_as_leader_count'),
       timeoutsAsLeader: grab('consensus_number_of_timeouts_as_leader'),
+      nodeKey: text.match(/^consensus_node\{key="([^"]+)"\}/m)?.[1] ?? null,
     };
   } catch {
     return null;
@@ -832,12 +841,12 @@ async function pollLocalNode(): Promise<void> {
         view.lagBlocks = lag;
         if (lag > cfg.heightLagBlocks) {
           if (lm.initialized && !lm.lagAlerted && cooldownOk('local:lag')) {
-            lm.lagAlerted = true;
-            await sendAlert({
+            lm.lagAlerted = await sendAlert({
               severity: 'warning',
               title: 'Local node behind',
               lines: [`🐢 ${lag} blocks behind (local ${height} / network ${remoteHeight})`],
             });
+            if (!lm.lagAlerted) refundCooldown('local:lag');
           }
         } else if (lm.lagAlerted) {
           lm.lagAlerted = false;
@@ -860,10 +869,13 @@ async function pollLocalNode(): Promise<void> {
         mainnetM?.lastStakingOkAt !== null &&
         mainnetM !== undefined &&
         Date.now() - mainnetM.lastStakingOkAt! < cfg.pollIntervalSec * 3 * 1000;
-      const firstVv = mainnetM?.view.validators[0];
-      if (!stakingFresh && firstVv && metrics.leaderSlots !== null) {
-        firstVv.leaderSlots = metrics.leaderSlots;
-        firstVv.missedLeaderSlots = metrics.timeoutsAsLeader ?? 0;
+      // Back up the card that belongs to THIS node (matched by its own
+      // key from the metrics); first validator only as a last resort.
+      const backupVv =
+        mainnetM?.view.validators.find((v) => v.key === metrics.nodeKey) ?? mainnetM?.view.validators[0];
+      if (!stakingFresh && backupVv && metrics.leaderSlots !== null) {
+        backupVv.leaderSlots = metrics.leaderSlots;
+        backupVv.missedLeaderSlots = metrics.timeoutsAsLeader ?? 0;
       }
 
       if (metrics.lastDecidedView !== null) {
@@ -905,8 +917,7 @@ async function pollLocalNode(): Promise<void> {
           if (stuckFor >= cfg.stuckAfterMin * 60_000) {
             view.stuck = true;
             if (lm.initialized && !lm.stuckAlerted && cooldownOk('local:stuck')) {
-              lm.stuckAlerted = true;
-              await sendAlert({
+              lm.stuckAlerted = await sendAlert({
                 severity: 'critical',
                 title: 'Node stuck',
                 lines: [
@@ -914,10 +925,10 @@ async function pollLocalNode(): Promise<void> {
                   '🌐 network is progressing, your node is not',
                 ],
               });
+              if (!lm.stuckAlerted) refundCooldown('local:stuck');
             }
             if (lm.stuckAlerted && !lm.stuckPdTriggered && stuckFor >= cfg.localDownPageMin * 60_000) {
-              lm.stuckPdTriggered = true;
-              await sendAlert({
+              lm.stuckPdTriggered = await sendAlert({
                 severity: 'critical',
                 title: 'Node stuck',
                 lines: [`👁 view frozen at ${metrics.lastDecidedView} for ${dur(lm.stuckSince)}`],
@@ -941,12 +952,12 @@ async function pollLocalNode(): Promise<void> {
       view.lagBlocks = null;
       if (lm.downSince === null) lm.downSince = Date.now();
       if (lm.initialized && !lm.downAlerted && cooldownOk('local:down')) {
-        lm.downAlerted = true;
-        await sendAlert({
+        lm.downAlerted = await sendAlert({
           severity: 'critical',
           title: 'Local node down',
           lines: [`🔌 ${cfg.localNodeUrl}`, `📉 ${lm.failCount} failed checks`],
         });
+        if (!lm.downAlerted) refundCooldown('local:down');
       }
       // Chat hears about it once, immediately; PagerDuty only if the node
       // has not come back within the escalation window.
@@ -955,8 +966,7 @@ async function pollLocalNode(): Promise<void> {
         !lm.downPdTriggered &&
         Date.now() - lm.downSince >= cfg.localDownPageMin * 60_000
       ) {
-        lm.downPdTriggered = true;
-        await sendAlert({
+        lm.downPdTriggered = await sendAlert({
           severity: 'critical',
           title: 'Local node down',
           lines: [`⏱ down ${dur(lm.downSince)}`],

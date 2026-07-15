@@ -3,9 +3,17 @@ services:
     build: .
     container_name: espressoduty
     env_file: .env
+    environment:
+      # On a volume so the state survives image rebuilds, not just restarts.
+      STATE_FILE: /data/state.json
+    volumes:
+      - espressoduty-data:/data
     ports:
       # Loopback only: the dashboard is read-only but unauthenticated.
       # To serve it beyond this host, put an authenticated reverse proxy
       # in front instead of widening this binding.
       - '127.0.0.1:3030:3030'
     restart: unless-stopped
+
+volumes:
+  espressoduty-data:

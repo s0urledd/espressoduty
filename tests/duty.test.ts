@@ -9,9 +9,11 @@ const alerts: Array<{ severity: string; title: string; pagerduty?: string; dedup
 vi.mock('../src/lib/alerts', () => ({
   sendAlert: vi.fn(async (ev: unknown) => {
     alerts.push(ev as (typeof alerts)[number]);
+    return true; // a channel took the message
   }),
 }));
 
+const { sendAlert } = await import('../src/lib/alerts');
 const { evaluateLeaderDuty } = await import('../src/lib/monitor');
 type Vm = import('../src/lib/monitor').ValidatorMachine;
 type Entry = import('../src/lib/monitor').ActiveNode;
@@ -143,6 +145,20 @@ describe('leader-duty state machine', () => {
     expect(alerts).toEqual([]);
     expect(m.missStreak).toBe(0);
     expect(m.prevMissed).toBe(3); // no catch-up alert after recovery
+  });
+
+  it('retries an alert whose delivery failed instead of counting it as sent', async () => {
+    vi.mocked(sendAlert).mockImplementationOnce(async (ev: unknown) => {
+      alerts.push(ev as (typeof alerts)[number]);
+      return false; // webhook 500 etc.
+    });
+    const m = vm({ prevProposals: 55, prevMissed: 2, missStreak: 2 });
+    const v = vv();
+    await evaluateLeaderDuty(net, v, m, entry(55, 58), 471, false); // miss 3 -> send fails
+    expect(m.trendAlerted).toBe(false);
+    await evaluateLeaderDuty(net, v, m, entry(55, 59), 471, false); // miss 4 -> retried, delivered
+    expect(m.trendAlerted).toBe(true);
+    expect(alerts.filter((a) => a.severity === 'warning')).toHaveLength(2);
   });
 
   it('pairs the back-in-set recovery with the missing incident', async () => {
