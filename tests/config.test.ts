@@ -57,6 +57,7 @@ describe('defaults', () => {
     expect(cfg.localDownFails).toBe(5);
     expect(cfg.localDownPageMin).toBe(10);
     expect(cfg.stuckAfterMin).toBe(5);
+    expect(cfg.decideStallSec).toBe(300);
     expect(cfg.networks[0].stakingApis).toEqual(['https://cache.main.net.espresso.network/v0/staking']);
     expect(cfg.networks[0].queryNodes).toEqual(['https://query.main.net.espresso.network/v1']);
   });
