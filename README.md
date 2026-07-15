@@ -57,7 +57,6 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | `CONSECUTIVE_MISSES_WARN` / `CONSECUTIVE_MISSES_CRIT` | `3` / `5` | Missed leader slots: chat / PagerDuty |
 | `LOCAL_DOWN_FAILS` / `HEIGHT_LAG_BLOCKS` | `5` / `50` | Local node monitoring |
 | `LOCAL_DOWN_PAGE_MIN` / `STUCK_AFTER_MIN` | `10` / `5` | Minutes before down pages / stuck alerts |
-| `DECIDE_STALL_SEC` | `300` | Seconds without a finalized block before the chain-stall alert |
 | `POLL_INTERVAL_SEC` | `60` | Poll cadence |
 | `HEARTBEAT_URL` | — | Dead man's switch: GET after every successful poll |
 | `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
@@ -92,7 +91,7 @@ Also watched:
 | Alert | Severity |
 |---|---|
 | Validator not in the active set (dropped out / wrong key or address) | critical, pages |
-| No decide for `DECIDE_STALL_SEC` (5m), cross-checked against other endpoints first | critical (warning if only the endpoint is stale) |
+| No decide for 5 minutes, cross-checked against other endpoints first | critical (warning if only the endpoint is stale) |
 | Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails): chat immediately, PagerDuty if still down after `LOCAL_DOWN_PAGE_MIN` (10m) | critical |
 | Local node lagging (`HEIGHT_LAG_BLOCKS`) | warning |
 | Node consensus stuck: reachable but `last_decided_view` frozen for `STUCK_AFTER_MIN` (5m) while the network progresses; PagerDuty after `LOCAL_DOWN_PAGE_MIN` (needs a local node with metrics) | critical |
