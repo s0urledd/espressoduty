@@ -168,7 +168,9 @@ export function loadConfig(): Config {
     stuckAfterMin: Math.max(1, num('STUCK_AFTER_MIN', 5)),
     missedWarn: num('MISSED_WARN', 0.5),
     missedCritical: num('MISSED_CRITICAL', 0.9),
-    decideStallSec: num('DECIDE_STALL_SEC', 60),
+    // 5 minutes: the network takes brief (~60-70s) finalization pauses
+    // around epoch transitions; those are routine, not a chain stall.
+    decideStallSec: Math.max(60, num('DECIDE_STALL_SEC', 300)),
     heightLagBlocks: num('HEIGHT_LAG_BLOCKS', 50),
     localDownFails: Math.max(2, num('LOCAL_DOWN_FAILS', 5)),
     statusPollTimeoutSec: Math.max(3, num('STATUS_POLL_TIMEOUT_SEC', 10)),
