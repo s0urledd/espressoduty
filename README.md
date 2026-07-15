@@ -4,11 +4,11 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 
-Uptime monitoring and alerting for [Espresso Network](https://espressosys.com/)
-validators. Watches leader duty (missed slots) poll by poll, alerts on
-consecutive missed leader slots, checks your node's liveness, and pages you
-over Telegram, Discord, Slack or PagerDuty. The dashboard on port 3030 updates live over server-sent
-events.
+Uptime monitoring and alerting for [Espresso Network](https://espressosys.com/) validators.
+
+espressoduty tracks chain-reported missed leader slots, monitors local node
+health, and sends alerts through Telegram, Discord, Slack and PagerDuty.
+The dashboard runs on port 3030 and updates over server-sent events.
 
 <img width="906" height="576" alt="image" src="https://github.com/user-attachments/assets/cab41479-a8d8-4050-8a71-924d8e0696f1" />
 
@@ -62,35 +62,29 @@ Everything lives in `.env` ([.env.example](.env.example) is the full list):
 | `STATE_FILE` | `./state.json` | Restart-durable counters and grid |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`, `PAGERDUTY_ROUTING_KEY` | — | Channels |
 
-## The alert rule: leader duty
+## Leader duty
 
-A validator is only on the critical path when it is the **leader**: miss
-your slot and the view times out; miss a vote as a non-leader and the QC
-closes at ~2/3 quorum without you. Vote participation therefore mostly
-measures the quorum race (network latency, geography), not node health —
-which is why Espresso's own dashboard leads with missed slots and so does
-espressoduty.
+Leader duty is the primary uptime signal. Missing a leader slot causes the
+view to time out. A non-leader vote may be excluded once a QC has formed
+from roughly two-thirds of stake, so vote participation is shown as a
+latency and connectivity metric rather than an uptime alert.
 
-Missed slots are counted by the chain itself: the staking API's per-epoch
-proposed/total counters, the same numbers stake.espresso.network shows.
-That matters — a node can miss a slot without ever noticing (its proposal
-never reached quorum, its own timer never fired), and a query node that
-didn't witness the miss reports a clean rate. The chain is the only
-neutral witness. Poll to poll:
+Missed slots come from the staking API's per-epoch proposal and slot
+counters, the same source used by stake.espresso.network.
 
-- missed count rose = **missed leader slot(s)**. `CONSECUTIVE_MISSES_WARN`
-  (3) in a row → Telegram / Slack / Discord; `CONSECUTIVE_MISSES_CRIT` (5)
-  in a row → PagerDuty. A streak means the node is failing its critical
-  duty; a successful proposal clears it.
-- proposal count rose = **successful proposal** → streak resets, recovery
-  sent, PagerDuty incident resolved.
-- neither moved = no leader slot in that window (slots are sparse, that is
-  normal).
+Poll to poll:
+
+- missed count increased: one or more leader slots were missed
+- proposal count increased: the validator proposed successfully
+- neither changed: no leader duty occurred during the poll window
+
+Three consecutive misses trigger a chat alert. Five trigger PagerDuty.
+A successful proposal clears the streak and resolves the incident.
 
 Counters persist to `STATE_FILE`: a restart continues the streak, and a
-miss that lands during the restart still shows up as a delta afterwards.
-An epoch rollover resets counters cleanly (they restart with the epoch by
-design — that is not an alert) and resolves anything left open.
+miss that lands during the restart shows up as a delta afterwards. An
+epoch rollover resets counters (they restart with the epoch by design)
+and resolves anything left open.
 
 Also watched:
 
@@ -109,11 +103,10 @@ local-node alert is the root cause, the missed slots are its symptom (the
 counter itself keeps following the chain). Every alert has a paired
 recovery and repeats respect a cooldown.
 
-And for the one failure espressoduty cannot report itself — its own death —
-set `HEARTBEAT_URL`: a GET fires after every successful poll, and a service
-like [healthchecks.io](https://healthchecks.io) or
-[Uptime Kuma](https://github.com/louislam/uptime-kuma) alerts you when the
-pings stop.
+`HEARTBEAT_URL` covers espressoduty itself: a GET fires after every
+successful poll, so [healthchecks.io](https://healthchecks.io) or
+[Uptime Kuma](https://github.com/louislam/uptime-kuma) can alert you when
+espressoduty stops running.
 
 ## Dashboard
 

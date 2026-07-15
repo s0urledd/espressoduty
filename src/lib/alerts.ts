@@ -62,14 +62,17 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function sendTelegram(ev: AlertEvent): Promise<void> {
+// Senders return null when the channel is not configured (nothing to
+// fail), true/false for an actual delivery attempt.
+
+async function sendTelegram(ev: AlertEvent): Promise<boolean | null> {
   const cfg = loadConfig();
-  if (!cfg.telegramBotToken || !cfg.telegramChatId) return;
+  if (!cfg.telegramBotToken || !cfg.telegramChatId) return null;
   const header = `${EMOJI[ev.severity]} <b>${escapeHtml(ev.title)}</b>`;
   const net = ev.network ? `\n<i>${escapeHtml(ev.network)}</i>` : '';
   const body = ev.lines.map((l) => escapeHtml(l)).join('\n');
   const link = ev.link ? `\n<a href="${ev.link.url}">${escapeHtml(ev.link.label)}</a>` : '';
-  await post(`https://api.telegram.org/bot${cfg.telegramBotToken}/sendMessage`, {
+  return post(`https://api.telegram.org/bot${cfg.telegramBotToken}/sendMessage`, {
     chat_id: cfg.telegramChatId,
     text: `${header}${net}\n${body}${link}`,
     parse_mode: 'HTML',
@@ -77,10 +80,10 @@ async function sendTelegram(ev: AlertEvent): Promise<void> {
   });
 }
 
-async function sendDiscord(ev: AlertEvent): Promise<void> {
+async function sendDiscord(ev: AlertEvent): Promise<boolean | null> {
   const cfg = loadConfig();
-  if (!cfg.discordWebhookUrl) return;
-  await post(cfg.discordWebhookUrl, {
+  if (!cfg.discordWebhookUrl) return null;
+  return post(cfg.discordWebhookUrl, {
     embeds: [
       {
         title: `${EMOJI[ev.severity]} ${ev.title}`,
@@ -93,9 +96,9 @@ async function sendDiscord(ev: AlertEvent): Promise<void> {
   });
 }
 
-async function sendSlack(ev: AlertEvent): Promise<void> {
+async function sendSlack(ev: AlertEvent): Promise<boolean | null> {
   const cfg = loadConfig();
-  if (!cfg.slackWebhookUrl) return;
+  if (!cfg.slackWebhookUrl) return null;
   const blocks: unknown[] = [
     {
       type: 'section',
@@ -115,13 +118,13 @@ async function sendSlack(ev: AlertEvent): Promise<void> {
       elements: [{ type: 'mrkdwn', text: `espressoduty · ${ev.network}` }],
     });
   }
-  await post(cfg.slackWebhookUrl, { blocks });
+  return post(cfg.slackWebhookUrl, { blocks });
 }
 
-async function sendPagerDuty(ev: AlertEvent): Promise<void> {
+async function sendPagerDuty(ev: AlertEvent): Promise<boolean | null> {
   const cfg = loadConfig();
-  if (!cfg.pagerdutyRoutingKey || !ev.dedupKey || !ev.pagerduty) return;
-  await post('https://events.pagerduty.com/v2/enqueue', {
+  if (!cfg.pagerdutyRoutingKey || !ev.dedupKey || !ev.pagerduty) return null;
+  return post('https://events.pagerduty.com/v2/enqueue', {
     routing_key: cfg.pagerdutyRoutingKey,
     event_action: ev.pagerduty,
     dedup_key: ev.dedupKey,
@@ -138,12 +141,22 @@ async function sendPagerDuty(ev: AlertEvent): Promise<void> {
  * Fan an event out to the configured chat channels. Events carrying a
  * PagerDuty trigger/resolve action go to PagerDuty only: the chat channels
  * already received the human-facing alert, repeating it is just noise.
+ *
+ * Returns whether the event actually reached at least one configured
+ * channel — the monitor marks alerts as sent/paged only on true, so a
+ * webhook 500 means the same alert is retried on the next poll instead of
+ * being silently counted as delivered. With no channel configured for the
+ * event there is nothing to retry, which counts as done.
  */
-export async function sendAlert(ev: AlertEvent): Promise<void> {
+export async function sendAlert(ev: AlertEvent): Promise<boolean> {
   const results = await Promise.allSettled(
     ev.pagerduty ? [sendPagerDuty(ev)] : [sendTelegram(ev), sendDiscord(ev), sendSlack(ev)],
   );
-  const label = `${ev.severity}: ${ev.title}`;
-  const failed = results.filter((r) => r.status === 'rejected').length;
-  console.log(`[alerts] ${label}${failed ? ` (${failed} channel(s) failed)` : ''}`);
+  const attempts = results
+    .map((r) => (r.status === 'fulfilled' ? r.value : false))
+    .filter((v): v is boolean => v !== null);
+  const delivered = attempts.length === 0 || attempts.includes(true);
+  const failed = attempts.filter((v) => !v).length;
+  console.log(`[alerts] ${ev.severity}: ${ev.title}${failed ? ` (${failed} channel(s) failed)` : ''}`);
+  return delivered;
 }
