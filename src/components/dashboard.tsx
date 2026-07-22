@@ -174,7 +174,7 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
   const source = active ? (active.isLocal ? 'local' : new URL(active.url).host.split('.')[0]) : '—';
 
   return (
-    <div className="card flex flex-wrap items-center gap-x-8 gap-y-2 px-5 py-3 text-sm">
+    <div className="card flex flex-wrap items-center gap-x-5 gap-y-2 px-5 py-3 text-sm">
       <span className="flex items-center gap-2">
         <span
           className={clsx('h-2 w-2 rounded-full', alive && 'live-dot')}
@@ -213,18 +213,20 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
         />
       )}
       {localNode?.version && (
-        <Field
-          k="node"
-          v={localNode.version}
-          color={
-            localNode.refVersion && /^\d{8}$/.test(localNode.version) && /^\d{8}$/.test(localNode.refVersion)
-              ? localNode.version < localNode.refVersion
-                ? 'var(--warn)'
-                : 'var(--ok)'
-              : undefined
-          }
-          title={localNode.refVersion ? `network: ${localNode.refVersion}` : undefined}
-        />
+        <span className="ml-auto">
+          <Field
+            k="version"
+            v={localNode.version}
+            color={
+              localNode.refVersion && /^\d{8}$/.test(localNode.version) && /^\d{8}$/.test(localNode.refVersion)
+                ? localNode.version < localNode.refVersion
+                  ? 'var(--warn)'
+                  : 'var(--ok)'
+                : undefined
+            }
+            title={localNode.refVersion ? `network: ${localNode.refVersion}` : undefined}
+          />
+        </span>
       )}
     </div>
   );
