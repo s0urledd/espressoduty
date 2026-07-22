@@ -72,6 +72,11 @@ export function GET() {
     gauge('espressoduty_local_node_stuck', 'Local consensus stuck while the network progresses (0/1)', [
       [{}, ln.stuck ? 1 : 0],
     ]);
+    const comparable =
+      ln.version !== null && ln.refVersion !== null && /^\d{8}$/.test(ln.version) && /^\d{8}$/.test(ln.refVersion);
+    gauge('espressoduty_local_node_version_behind', 'Local node build older than Espresso public infra (0/1)', [
+      [{}, comparable ? (ln.version! < ln.refVersion! ? 1 : 0) : null],
+    ]);
   }
 
   return new Response(out.join('\n') + '\n', {

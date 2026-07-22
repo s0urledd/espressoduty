@@ -88,6 +88,10 @@ export interface LocalNodeView {
   lastDecidedView: number | null;
   /** True while the node responds but its view number is not advancing. */
   stuck: boolean;
+  /** The node's build tag (consensus_version desc, e.g. "20260722"). */
+  version: string | null;
+  /** The build tag Espresso's own public infra runs — the reference. */
+  refVersion: string | null;
 }
 
 export interface Snapshot {
