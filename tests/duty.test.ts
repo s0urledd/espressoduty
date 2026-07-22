@@ -14,7 +14,7 @@ vi.mock('../src/lib/alerts', () => ({
 }));
 
 const { sendAlert } = await import('../src/lib/alerts');
-const { evaluateLeaderDuty } = await import('../src/lib/monitor');
+const { evaluateLeaderDuty, lagBetween } = await import('../src/lib/monitor');
 type Vm = import('../src/lib/monitor').ValidatorMachine;
 type Entry = import('../src/lib/monitor').ActiveNode;
 
@@ -171,5 +171,17 @@ describe('leader-duty state machine', () => {
       ['recovered', 'resolve'],
     ]);
     expect(alerts[1].dedupKey).toMatch(/:missing$/);
+  });
+});
+
+describe('lag verdict', () => {
+  it('computes lag only from two real heights', () => {
+    expect(lagBetween(19359990, 19359998)).toBe(8);
+  });
+
+  it('refuses a verdict when either side reports 0 (the 2026-07-21 halt case)', () => {
+    expect(lagBetween(0, 19359998)).toBeNull(); // "19,359,998 blocks behind (local 0)" must never fire
+    expect(lagBetween(19359998, 0)).toBeNull();
+    expect(lagBetween(19359998, null)).toBeNull();
   });
 });

@@ -101,6 +101,17 @@ function refundCooldown(key: string): void {
   cooldowns.delete(key);
 }
 
+/**
+ * A block height of 0 means "no state to report yet" (a node warming up,
+ * an endpoint degraded during a halt), never a real position — comparing
+ * against it produced a "19,359,998 blocks behind (local 0)" alert during
+ * the 2026-07-21 chain halt. No real number on both sides, no verdict.
+ */
+export function lagBetween(local: number, remote: number | null): number | null {
+  if (remote === null || !(remote > 0) || !(local > 0)) return null;
+  return remote - local;
+}
+
 function dur(fromMs: number): string {
   const s = Math.max(1, Math.round((Date.now() - fromMs) / 1000));
   if (s < 60) return `${s}s`;
@@ -660,7 +671,7 @@ async function pollStatus(net: NetworkConfig): Promise<void> {
   const m = machines.get(net.name)!;
   try {
     const [height, tsld] = await Promise.all([m.statusClient.blockHeight(), m.statusClient.timeSinceLastDecide()]);
-    m.view.height = height;
+    m.view.height = height > 0 ? height : null; // 0 = endpoint has no state, not block zero
     m.view.timeSinceLastDecide = tsld;
 
     await checkStall(net, m, tsld);
@@ -800,7 +811,7 @@ async function pollLocalNode(): Promise<void> {
       cfg.statusPollTimeoutSec * 1000,
     );
     view.reachable = true;
-    view.height = height;
+    view.height = height > 0 ? height : null;
     lm.failCount = 0;
 
     if (lm.downAlerted) {
@@ -836,9 +847,9 @@ async function pollLocalNode(): Promise<void> {
       } catch {
         /* public node unreachable; skip the lag check this round */
       }
-      if (remoteHeight !== null) {
-        const lag = remoteHeight - height;
-        view.lagBlocks = lag;
+      const lag = lagBetween(height, remoteHeight);
+      view.lagBlocks = lag;
+      if (lag !== null) {
         if (lag > cfg.heightLagBlocks) {
           if (lm.initialized && !lm.lagAlerted && cooldownOk('local:lag')) {
             lm.lagAlerted = await sendAlert({
