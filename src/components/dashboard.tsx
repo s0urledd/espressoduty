@@ -212,6 +212,20 @@ function StatusLine({ net, localNode }: { net: NetworkView; localNode: Snapshot[
           }
         />
       )}
+      {localNode?.version && (
+        <Field
+          k="node"
+          v={localNode.version}
+          color={
+            localNode.refVersion && /^\d{8}$/.test(localNode.version) && /^\d{8}$/.test(localNode.refVersion)
+              ? localNode.version < localNode.refVersion
+                ? 'var(--warn)'
+                : 'var(--ok)'
+              : undefined
+          }
+          title={localNode.refVersion ? `network: ${localNode.refVersion}` : undefined}
+        />
+      )}
     </div>
   );
 }

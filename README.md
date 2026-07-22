@@ -95,6 +95,7 @@ Also watched:
 | Local node unreachable (`LOCAL_DOWN_FAILS` consecutive fails): chat immediately, PagerDuty if still down after `LOCAL_DOWN_PAGE_MIN` (10m) | critical |
 | Local node lagging (`HEIGHT_LAG_BLOCKS`) | warning |
 | Node consensus stuck: reachable but `last_decided_view` frozen for `STUCK_AFTER_MIN` (5m) while the network progresses; PagerDuty after `LOCAL_DOWN_PAGE_MIN` (needs a local node with metrics) | critical |
+| Local node build older than what Espresso's public infra runs (needs a local node) | warning |
 | Staking API unreachable for 60m (miss alerts paused meanwhile) | warning |
 | Start / shutdown | info |
 
@@ -136,8 +137,10 @@ config, nothing else depends on it.
 - `status/block-height`, `status/time-since-last-decide`: chain height and
   network liveness (the chain-stall check)
 - `status/metrics` (local node only): the `last_decided_view` counter for
-  the instant stuck check; the node's leader counters serve as a display
-  backup while the staking API is unreachable
+  the instant stuck check, the node's build version (compared against the
+  version Espresso's public infra runs — shown in the status line, warned
+  on when behind), and the leader counters as a display backup while the
+  staking API is unreachable
 
 Sources fail over in order; the status line's `src` shows which one served
 the last poll.

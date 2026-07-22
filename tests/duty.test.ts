@@ -14,7 +14,7 @@ vi.mock('../src/lib/alerts', () => ({
 }));
 
 const { sendAlert } = await import('../src/lib/alerts');
-const { evaluateLeaderDuty, lagBetween } = await import('../src/lib/monitor');
+const { evaluateLeaderDuty, lagBetween, versionBehind } = await import('../src/lib/monitor');
 type Vm = import('../src/lib/monitor').ValidatorMachine;
 type Entry = import('../src/lib/monitor').ActiveNode;
 
@@ -183,5 +183,19 @@ describe('lag verdict', () => {
     expect(lagBetween(0, 19359998)).toBeNull(); // "19,359,998 blocks behind (local 0)" must never fire
     expect(lagBetween(19359998, 0)).toBeNull();
     expect(lagBetween(19359998, null)).toBeNull();
+  });
+});
+
+describe('version comparison', () => {
+  it('flags an older dated tag (the 2026-07-22 emergency patch case)', () => {
+    expect(versionBehind('20260721', '20260722')).toBe(true);
+  });
+
+  it('stays quiet on equal, newer, non-dated or missing tags', () => {
+    expect(versionBehind('20260722', '20260722')).toBe(false);
+    expect(versionBehind('20260723', '20260722')).toBe(false);
+    expect(versionBehind('dev-build', '20260722')).toBe(false);
+    expect(versionBehind(null, '20260722')).toBe(false);
+    expect(versionBehind('20260721', null)).toBe(false);
   });
 });

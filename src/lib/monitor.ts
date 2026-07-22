@@ -81,6 +81,10 @@ interface LocalMachine {
   stuckSince: number | null;
   stuckPdTriggered: boolean;
   downPdTriggered: boolean;
+  /** Build tag Espresso's public infra runs, refreshed every few minutes. */
+  refVersion: string | null;
+  refVersionAt: number;
+  versionAlerted: boolean;
 }
 
 const machines = new Map<NetworkName, NetworkMachine>();
@@ -760,6 +764,38 @@ interface NodeMetrics {
   timeoutsAsLeader: number | null;
   /** The node's own BLS key, to back up the RIGHT card with multiple validators. */
   nodeKey: string | null;
+  /** Build tag (consensus_version desc, e.g. "20260722"). */
+  version: string | null;
+}
+
+/** Release tags are dated (YYYYMMDD); anything else is not comparable. */
+const VERSION_TAG_RE = /^\d{8}$/;
+
+/** True when both tags are dated and the local one is older. */
+export function versionBehind(local: string | null, reference: string | null): boolean {
+  if (!local || !reference) return false;
+  if (!VERSION_TAG_RE.test(local) || !VERSION_TAG_RE.test(reference)) return false;
+  return local < reference;
+}
+
+/** How often to re-read the reference version from the public endpoint. */
+const VERSION_REFRESH_MS = 10 * 60_000;
+
+/** The build Espresso's own public infra runs — what a validator should match. */
+async function fetchNetworkVersion(base: string): Promise<string | null> {
+  const url = `${base.replace(/\/$/, '')}/status/metrics`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), cfg.statusPollTimeoutSec * 1000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.match(/consensus_version\{[^}]*desc="([^"]+)"/)?.[1] ?? null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -788,6 +824,7 @@ async function fetchNodeMetrics(): Promise<NodeMetrics | null> {
       leaderSlots: grab('consensus_view_duration_as_leader_count'),
       timeoutsAsLeader: grab('consensus_number_of_timeouts_as_leader'),
       nodeKey: text.match(/^consensus_node\{key="([^"]+)"\}/m)?.[1] ?? null,
+      version: text.match(/consensus_version\{[^}]*desc="([^"]+)"/)?.[1] ?? null,
     };
   } catch {
     return null;
@@ -875,6 +912,35 @@ async function pollLocalNode(): Promise<void> {
     const metrics = await fetchNodeMetrics();
     if (metrics) {
       view.lastDecidedView = metrics.lastDecidedView;
+      if (metrics.version) view.version = metrics.version;
+
+      // Version check: compare against what Espresso's own infra runs.
+      // Caught the 2026-07-22 emergency patch scenario: local 20260721
+      // while the public endpoint already ran 20260722.
+      if (lm.remoteBase && Date.now() - lm.refVersionAt >= VERSION_REFRESH_MS) {
+        lm.refVersionAt = Date.now();
+        const ref = await fetchNetworkVersion(lm.remoteBase);
+        if (ref) lm.refVersion = ref;
+      }
+      view.refVersion = lm.refVersion;
+      if (versionBehind(view.version, lm.refVersion)) {
+        if (lm.initialized && !lm.versionAlerted && cooldownOk('local:version')) {
+          lm.versionAlerted = await sendAlert({
+            severity: 'warning',
+            title: 'Node version behind',
+            lines: [`📦 ${view.version} → ${lm.refVersion}`, '⬆️ update your node'],
+          });
+          if (!lm.versionAlerted) refundCooldown('local:version');
+        }
+      } else if (lm.versionAlerted && view.version) {
+        lm.versionAlerted = false;
+        await sendAlert({
+          severity: 'recovered',
+          title: 'Node version current',
+          lines: [`📦 ${view.version}`],
+        });
+      }
+
       const mainnetM = machines.get('mainnet');
       const stakingFresh =
         mainnetM?.lastStakingOkAt !== null &&
@@ -1048,6 +1114,9 @@ export function startMonitoring(): void {
       stuckSince: null,
       stuckPdTriggered: false,
       downPdTriggered: false,
+      refVersion: null,
+      refVersionAt: 0,
+      versionAlerted: false,
     };
     store.localNode = {
       url: cfg.localNodeUrl,
@@ -1056,6 +1125,8 @@ export function startMonitoring(): void {
       lagBlocks: null,
       lastDecidedView: null,
       stuck: false,
+      version: null,
+      refVersion: null,
     };
     void pollLocalNode();
     timers.push(setInterval(() => void pollLocalNode(), Math.max(cfg.statusPollIntervalSec, 15) * 1000));
