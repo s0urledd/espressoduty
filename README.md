@@ -10,7 +10,8 @@ espressoduty tracks chain-reported missed leader slots, monitors local node
 health, and sends alerts through Telegram, Discord, Slack and PagerDuty.
 The dashboard runs on port 3030 and updates over server-sent events.
 
-<img width="906" height="576" alt="image" src="https://github.com/user-attachments/assets/cab41479-a8d8-4050-8a71-924d8e0696f1" />
+<img width="866" height="614" alt="image" src="https://github.com/user-attachments/assets/829942bf-eb1d-40d8-884e-44cd7094af71" />
+
 
 
 ## Local vs public mode
