@@ -345,7 +345,10 @@ async function pollStaking(net: NetworkConfig): Promise<void> {
       await evaluateLeaderDuty(net, vv, vm, entry, epoch, suppressed);
     }
     vv.health = healthOf(vv, vm);
-    vm.lastEpoch = epoch;
+    // lastEpoch belongs to the duty machine: it marks the epoch whose
+    // counters the streak was built from. Stamping it here would let a
+    // poll that never saw the validator swallow the rollover, carrying a
+    // stale streak into the new epoch.
     vm.initialized = true;
   }
 
@@ -515,7 +518,11 @@ export async function evaluateLeaderDuty(
   if (suppressed) return;
 
   if (dMissed > 0 && dProposed === 0) {
-    vm.missStreak += dMissed;
+    // The streak counts consecutive misses INSIDE this epoch, so it can
+    // never exceed what the chain reports for the epoch. Clamping keeps a
+    // stale streak from a previous epoch out of the alert, whatever
+    // leaked it.
+    vm.missStreak = Math.min(vm.missStreak + dMissed, missed);
     if (vm.trendSince === null) vm.trendSince = Date.now();
     // Flags are set only when a channel actually took the message; a
     // failed webhook refunds the cooldown and the next poll retries.

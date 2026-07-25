@@ -161,6 +161,27 @@ describe('leader-duty state machine', () => {
     expect(alerts.filter((a) => a.severity === 'warning')).toHaveLength(2);
   });
 
+  it('never lets a streak cross an epoch boundary (the 03:15 "2 in a row · 1/17" case)', async () => {
+    // Epoch 484 ended mid-streak; the boundary poll did not go through the
+    // duty machine (validator briefly absent from the staking response).
+    const m = vm({ lastEpoch: 484, missStreak: 1, prevProposals: 40, prevMissed: 1 });
+    const v = vv();
+    await evaluateLeaderDuty(net, v, m, entry(16, 16), 485, false); // rollover seen late
+    expect(m.missStreak).toBe(0);
+    expect(m.lastEpoch).toBe(485);
+    await evaluateLeaderDuty(net, v, m, entry(16, 17), 485, false); // one real miss
+    expect(m.missStreak).toBe(1); // not 2 — the other miss was last epoch
+    expect(alerts.filter((a) => a.severity === 'warning')).toEqual([]);
+  });
+
+  it('clamps the streak to the misses the epoch actually reports', async () => {
+    // Defense in depth: whatever leaks a stale streak, the alert cannot
+    // claim more consecutive misses than the epoch contains.
+    const m = vm({ missStreak: 4, prevProposals: 16, prevMissed: 0 });
+    await evaluateLeaderDuty(net, vv(), m, entry(16, 17), 471, false);
+    expect(m.missStreak).toBe(1);
+  });
+
   it('pairs the back-in-set recovery with the missing incident', async () => {
     const m = vm({ missingAlerted: true, missingPdTriggered: true, missingSince: Date.now() - 60000, prevProposals: 10, prevMissed: 0 });
     await evaluateLeaderDuty(net, vv(), m, entry(10, 10), 471, false);
