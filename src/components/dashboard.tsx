@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
 import { Activity, Copy, Github, Moon, Sun, Check } from 'lucide-react';
 import clsx from 'clsx';
-import type { Snapshot, NetworkView, ValidatorView } from '@/lib/state';
+import { sampleKind, type Snapshot, type NetworkView, type ValidatorView } from '@/lib/state';
 
 // Display thresholds for the missed-slots color; the server owns alerting.
 const MISSED_WARN = Number(process.env.NEXT_PUBLIC_MISSED_WARN ?? 0.5);
@@ -423,30 +423,18 @@ function PollGrid({ samples }: { samples: ValidatorView['samples'] }) {
           const prev = recent[i - 1];
           const boundary = prev !== undefined && prev.epoch !== null && s.epoch !== null && prev.epoch !== s.epoch;
           const time = new Date(s.t).toLocaleTimeString('en-US', { hour12: false });
-          const noData = s.vote === null && s.proposal === null;
-          const prevP =
-            prev !== undefined && prev.epoch === s.epoch && prev.proposal !== null ? prev.proposal : null;
-          // The operator's rule: falling = missed a leader slot (red);
-          // rising or steady = duty intact (green).
-          let kind: 'ok' | 'missed' | 'idle' | 'nodata';
-          if (noData) {
-            kind = 'nodata';
-          } else if (s.proposal === null) {
-            kind = 'idle';
-          } else if (prevP !== null && s.proposal < prevP - 1e-9) {
-            kind = 'missed';
-          } else if (prevP === null && s.proposal === 0) {
-            kind = 'missed'; // first reading at 0: every slot so far failed
-          } else {
-            kind = 'ok';
-          }
+          // Red only when the chain's miss counter actually grew — see
+          // sampleKind(): the ratio alone dips on stale cache reads.
+          const kind = sampleKind(prev, s);
+          const counts =
+            typeof s.missed === 'number' && typeof s.slots === 'number' ? `${s.missed}/${s.slots} missed` : null;
           const tip =
             kind === 'nodata'
               ? `${time} · no data`
               : kind === 'idle'
-                ? `${time} · epoch ${s.epoch} · no proposal data yet`
-                : `${time} · epoch ${s.epoch} · uptime ${fmtPct(s.proposal, 1)}${
-                    kind === 'missed' ? ' · missed leader slot ✗' : ''
+                ? `${time} · epoch ${s.epoch} · no leader slots yet`
+                : `${time} · epoch ${s.epoch} · ${counts ?? `uptime ${fmtPct(s.proposal, 1)}`}${
+                    kind === 'missed' ? ' · missed a slot here ✗' : ''
                   }`;
           return (
             <div key={s.t} className="flex h-5 items-stretch" title={tip}>

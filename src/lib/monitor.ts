@@ -341,7 +341,14 @@ async function pollStaking(net: NetworkConfig): Promise<void> {
       vv.leaderSlots = entry.slots;
       vv.missedLeaderSlots = entry.slots - entry.proposals;
       vv.epochMissCount = vv.missedLeaderSlots;
-      pushSample(vv, { t: Date.now(), epoch, vote, proposal });
+      pushSample(vv, {
+        t: Date.now(),
+        epoch,
+        vote,
+        proposal,
+        missed: vv.missedLeaderSlots,
+        slots: entry.slots,
+      });
       await evaluateLeaderDuty(net, vv, vm, entry, epoch, suppressed);
     }
     vv.health = healthOf(vv, vm);
