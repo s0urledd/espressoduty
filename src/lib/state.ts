@@ -22,6 +22,31 @@ export interface PollSample {
   epoch: number | null;
   vote: number | null;
   proposal: number | null;
+  /** Chain counters for the epoch; absent on samples written before 2026-07. */
+  missed?: number;
+  slots?: number;
+}
+
+export type SampleKind = 'ok' | 'missed' | 'idle' | 'nodata';
+
+/**
+ * How one grid cell reads. Red only when the chain's integer miss counter
+ * ACTUALLY grew since the previous poll of the same epoch — the staking
+ * API is a cache over backends at different blocks (block numbers observed
+ * going backwards between consecutive requests), so a dip in the
+ * proposals/slots ratio proves nothing on its own. Counters that only go
+ * up are the same source of truth the card and the alerts use.
+ */
+export function sampleKind(prev: PollSample | undefined, s: PollSample): SampleKind {
+  if (s.vote === null && s.proposal === null) return 'nodata';
+  if (s.proposal === null) return 'idle';
+  const sameEpoch = prev !== undefined && prev.epoch === s.epoch;
+  if (sameEpoch && typeof prev.missed === 'number' && typeof s.missed === 'number') {
+    return s.missed > prev.missed ? 'missed' : 'ok';
+  }
+  // No comparable counter (first poll of an epoch, or a sample from an
+  // older build): a baseline, never an event.
+  return 'ok';
 }
 
 export interface ValidatorView {
