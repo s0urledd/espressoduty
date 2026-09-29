@@ -58,7 +58,7 @@ describe('defaults', () => {
     expect(cfg.localDownPageMin).toBe(10);
     expect(cfg.stuckAfterMin).toBe(5);
     expect(cfg.decideStallSec).toBe(300);
-    expect(cfg.networks[0].stakingApis).toEqual(['https://cache.main.net.espresso.network/v0/staking']);
+    expect(cfg.networks[0].stakingApis).toEqual(['https://staking-api.main.net.espresso.network/v0/staking']);
     expect(cfg.networks[0].queryNodes).toEqual(['https://query.main.net.espresso.network/v1']);
   });
 
@@ -71,12 +71,43 @@ describe('defaults', () => {
     const cfg = await fresh({ MAINNET_VALIDATORS: BLS, TESTNET_VALIDATORS: `Test=${ADDR}` });
     const t = cfg.networks.find((n) => n.name === 'testnet')!;
     expect(t.validators[0]).toEqual({ key: ADDR.toLowerCase(), label: 'Test' });
-    expect(t.stakingApis).toEqual(['https://cache.decaf.testnet.espresso.network/v0/staking']);
+    expect(t.stakingApis).toEqual(['https://staking-api.decaf.testnet.espresso.network/v0/staking']);
     expect(t.queryNodes).toEqual(['https://query.decaf.testnet.espresso.network/v1']);
   });
 
-  it('reads STAKING_API as a comma-separated failover list', async () => {
+  it('reads STAKING_API as a comma-separated failover list, built-in endpoint last', async () => {
     const cfg = await fresh({ MAINNET_VALIDATORS: BLS, STAKING_API: 'https://a/v0/staking, https://b/v0/staking' });
-    expect(cfg.networks[0].stakingApis).toEqual(['https://a/v0/staking', 'https://b/v0/staking']);
+    expect(cfg.networks[0].stakingApis).toEqual([
+      'https://a/v0/staking',
+      'https://b/v0/staking',
+      'https://staking-api.main.net.espresso.network/v0/staking',
+    ]);
+  });
+
+  it('keeps a pre-move .env working: the retired cache URL falls through to the built-in one', async () => {
+    const cfg = await fresh({
+      MAINNET_VALIDATORS: BLS,
+      TESTNET_VALIDATORS: BLS,
+      STAKING_API: 'https://cache.main.net.espresso.network/v0/staking',
+      TESTNET_STAKING_API: 'https://cache.decaf.testnet.espresso.network/v0/staking',
+    });
+    expect(cfg.networks.map((n) => n.stakingApis)).toEqual([
+      ['https://cache.main.net.espresso.network/v0/staking', 'https://staking-api.main.net.espresso.network/v0/staking'],
+      [
+        'https://cache.decaf.testnet.espresso.network/v0/staking',
+        'https://staking-api.decaf.testnet.espresso.network/v0/staking',
+      ],
+    ]);
+  });
+
+  it('does not repeat the built-in endpoint when it is configured (trailing slash included)', async () => {
+    const cfg = await fresh({
+      MAINNET_VALIDATORS: BLS,
+      STAKING_API: 'https://staking-api.main.net.espresso.network/v0/staking/, https://b/v0/staking',
+    });
+    expect(cfg.networks[0].stakingApis).toEqual([
+      'https://staking-api.main.net.espresso.network/v0/staking/',
+      'https://b/v0/staking',
+    ]);
   });
 });
