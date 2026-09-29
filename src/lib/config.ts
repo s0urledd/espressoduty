@@ -118,6 +118,24 @@ export function shortKey(key: string): string {
   return body.length > 12 ? `${body.slice(0, 6)}…${body.slice(-4)}` : body;
 }
 
+const DEFAULT_STAKING_API: Record<NetworkName, string> = {
+  mainnet: 'https://staking-api.main.net.espresso.network/v0/staking',
+  testnet: 'https://staking-api.decaf.testnet.espresso.network/v0/staking',
+};
+
+/**
+ * Configured staking APIs, with the built-in one always last in line.
+ * Espresso moved the service from cache.*.espresso.network to
+ * staking-api.* after the 2026-09 upgrade and the old mainnet path went
+ * 404 — a .env copied before that silently lost every count. The
+ * built-in endpoint as the final failover keeps a stale .env working.
+ */
+function stakingApis(name: string, network: NetworkName): string[] {
+  const configured = list(name);
+  const builtin = DEFAULT_STAKING_API[network];
+  return configured.some((u) => u.replace(/\/+$/, '') === builtin) ? configured : [...configured, builtin];
+}
+
 let cached: Config | null = null;
 
 export function loadConfig(): Config {
@@ -132,10 +150,7 @@ export function loadConfig(): Config {
       name: 'mainnet',
       validators: mainnetValidators,
       queryNodes: queryNodes.length > 0 ? queryNodes : ['https://query.main.net.espresso.network/v1'],
-      stakingApis:
-        list('STAKING_API').length > 0
-          ? list('STAKING_API')
-          : ['https://cache.main.net.espresso.network/v0/staking'],
+      stakingApis: stakingApis('STAKING_API', 'mainnet'),
       explorerUrl: str('MAINNET_EXPLORER_URL', 'https://explorer.main.net.espresso.network'),
     });
   }
@@ -151,10 +166,7 @@ export function loadConfig(): Config {
         list('TESTNET_QUERY_NODE').length > 0
           ? list('TESTNET_QUERY_NODE')
           : ['https://query.decaf.testnet.espresso.network/v1'],
-      stakingApis:
-        list('TESTNET_STAKING_API').length > 0
-          ? list('TESTNET_STAKING_API')
-          : ['https://cache.decaf.testnet.espresso.network/v0/staking'],
+      stakingApis: stakingApis('TESTNET_STAKING_API', 'testnet'),
       explorerUrl: str('TESTNET_EXPLORER_URL', 'https://explorer.decaf.testnet.espresso.network'),
     });
   }
